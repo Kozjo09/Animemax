@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AnimeMax Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
+        body { background: #080808; color: white; font-family: 'Outfit', sans-serif; overflow-x: hidden; -webkit-tap-highlight-color: transparent; }
+        .accent { color: #cae962; }
+        .bg-accent { background: #cae962; }
+        .glass { background: rgba(15, 15, 15, 0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .card { background: #121212; border-radius: 18px; border: 1px solid rgba(255,255,255,0.03); transition: 0.2s; }
+        .card:active { transform: scale(0.97); border-color: #cae962; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        iframe { width: 100%; height: 100%; border: none; }
+        .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
+        .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
+    </style>
+</head>
+<body class="pb-32">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 glass p-4">
+        <div class="flex items-center justify-between max-w-4xl mx-auto mb-4">
+            <button onclick="nav('home')" class="text-2xl font-black italic uppercase tracking-tighter">ANIME<span class="accent">MAX</span></button>
+            <div class="flex gap-3">
+                <button onclick="nav('search')" class="w-10 h-10 rounded-full bg-[#121212] flex items-center justify-center border border-white/5"><i class="fa-solid fa-search text-xs"></i></button>
+                <button onclick="nav('profile')" id="prof-btn" class="w-10 h-10 rounded-full bg-[#121212] flex items-center justify-center border border-white/10">
+                    <i class="fa-solid fa-user-astronaut"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
+        <!-- Content wordt dynamisch geladen via JS -->
+    </main>
+
+    <!-- Navigatiebalk -->
+    <nav class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-sm glass rounded-[2.5rem] p-2 flex justify-around items-center shadow-2xl z-[100] border border-white/10">
+        <button onclick="nav('home')" class="p-4 nav-link" id="nav-home"><i class="fa-solid fa-house"></i></button>
+        <button onclick="nav('cloud')" class="p-4 nav-link" id="nav-cloud"><i class="fa-solid fa-cloud"></i></button>
+        <button onclick="nav('library')" class="p-4 nav-link" id="nav-library"><i class="fa-solid fa-layer-group"></i></button>
+        <button onclick="nav('profile')" class="p-4 nav-link" id="nav-profile"><i class="fa-solid fa-user-ninja"></i></button>
+    </nav>
+
+    <script>
+        const API = 'https://graphql.anilist.co';
+        
+        // Applicatie State (Lokaal opgeslagen in de browser)
+        let app = {
+            view: 'home',
+            id: null,
+            ep: 1,
+            mode: 'sub',
+            q: '',
+            user: localStorage.getItem('ax_user') || '',
+            lang: localStorage.getItem('ax_lang') || 'romaji', // 'romaji' of 'english'
+            token: localStorage.getItem('al_token') || '',
+            recent: JSON.parse(localStorage.getItem('ax_recent') || '[]'),
+            xmlLib: JSON.parse(localStorage.getItem('ax_xml') || '[]')
+        };
+
+        // --- AUTOMATISCHE REDIRECT TOKEN HASH DETECTIE ---
+        if (window.location.hash.includes('access_token')) {
+            const token = window.location.hash.match(/access_token=([^&]*)/)[1];
+            localStorage.setItem('al_token', token);
+            app.token = token;
+            window.location.hash = ''; // URL opschonen
+            alert("AniList gekoppeld!");
+        }
+
+        async function gql(query, vars) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (app.token) {
+                headers['Authorization'] = 'Bearer ' + app.token;
+            }
+            try {
+                const r = await fetch(API, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({ query, variables: vars })
+                });
+                return r.json();
+            } catch(e) { return null; }
+        }
+
+        function nav(view, params = {}) {
+            app.view = view;
+            app.id = params.id || null;
+            app.ep = params.ep || 1;
+            render();
+            window.scrollTo(0,0);
+        }
+
+        function saveRecent(id, title, img, ep) {
+            let rec = app.recent.filter(i => i.id != id);
+            rec.unshift({id, title, img, ep, ts: Date.now()});
+            app.recent = rec.slice(0, 10);
+            localStorage.setItem('ax_recent', JSON.stringify(app.recent));
+        }
+
+        function render() {
+            const main = document.getElementById('content');
+            
+            // Navigatie status kleuren updaten
+            document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('accent'));
+            document.querySelectorAll('.nav-link').forEach(el => el.classList.add('text-zinc-600'));
+            const activeNav = document.getElementById('nav-' + app.view);
+            if(activeNav) {
+                activeNav.classList.add('accent');
+                activeNav.classList.remove('text-zinc-600');
+            }
+            document.getElementById('prof-btn').classList.toggle('accent', !!app.token);
+
+            if (app.view === 'watch') {
+                main.innerHTML = `
+                    <!-- Video Frame -->
+                    <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10">
+                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
+                    </div>
+
+                    <!-- Besturing -->
+                    <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4">
+                        <div class="flex gap-2">
+                            <button onclick="app.mode='sub';render()" class="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
+                            <button onclick="app.mode='dub';render()" class="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="toggle-autonext" class="toggle-checkbox hidden">
+                                <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                <span class="text-[9px] font-black uppercase text-zinc-400">Auto Next</span>
+                            </label>
+                            <button onclick="sync()" class="bg-black border border-accent/20 text-accent px-3 py-1.5 rounded-lg text-[8px] font-black uppercase"><i class="fa-solid fa-sync mr-1"></i> Sync</button>
+                        </div>
+                    </div>
+
+                    <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-6">Laden...</h1>
+                    <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8"></div>
+                    <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4 tracking-widest">Related Seasons</h2>
+                    <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+                `;
+
+                // Auto-Next Checkbox initialiseren
+                const autoNext = document.getElementById('toggle-autonext');
+                autoNext.checked = localStorage.getItem('amax_autonext') === 'true';
+                autoNext.addEventListener('change', e => localStorage.setItem('amax_autonext', e.target.checked));
+
+                gql(`query($id:Int){Media(id:$id){title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                    if (!res || !res.data) return;
+                    const m = res.data.Media;
+                    const title = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                    document.getElementById('w-title').innerText = title;
+                    
+                    saveRecent(app.id, title, m.coverImage.large, app.ep);
+
+                    const grid = document.getElementById('ep-grid');
+                    for(let i=1; i<=(m.episodes || 24); i++) {
+                        grid.innerHTML += `<button onclick="nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-lg font-black text-[10px] ${i==app.ep?'bg-accent text-black shadow-lg':'bg-zinc-900 text-zinc-500'}">${i}</button>`;
+                    }
+
+                    const relGrid = document.getElementById('rel-grid');
+                    m.relations.edges.filter(e => e.node.type === 'ANIME').forEach(e => {
+                        const rTitle = app.lang === 'english' ? (e.node.title.english || e.node.title.romaji) : e.node.title.romaji;
+                        relGrid.innerHTML += `
+                            <button onclick="nav('watch', {id:${e.node.id}})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
+                                <div class="truncate pr-4">
+                                    <p class="truncate text-white">${rTitle}</p>
+                                    <p class="text-[7px] text-zinc-600 mt-0.5">${e.relationType.replace(/_/g, ' ')}</p>
+                                </div>
+                                <i class="fa-solid fa-chevron-right text-zinc-800 text-[10px]"></i>
+                            </button>
+                        `;
+                    });
+                });
+            }
+
+            else if (app.view === 'profile') {
+                main.innerHTML = `
+                    <div class="max-w-md mx-auto space-y-6">
+                        <div class="card p-8 border border-accent/20">
+                            <h2 class="font-black uppercase mb-6 text-sm">Instellingen</h2>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Gebruikersnaam</label>
+                                    <input type="text" id="set-u" value="${app.user}" placeholder="Username" class="w-full bg-black border border-white/10 p-4 rounded-xl outline-none font-bold text-center text-sm">
+                                </div>
+                                <div>
+                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">Weergave Taal</label>
+                                    <select id="set-l" class="w-full bg-black border border-white/10 p-4 rounded-xl outline-none font-bold text-sm">
+                                        <option value="romaji" ${app.lang=='romaji'?'selected':''}>Romaji (Japans)</option>
+                                        <option value="english" ${app.lang=='english'?'selected':''}>English</option>
+                                    </select>
+                                </div>
+                                <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-[10px] uppercase tracking-widest mt-4">Opslaan</button>
+                            </div>
+                        </div>
+                        <div class="card p-8 border border-blue-500/20 text-center">
+                            <h2 class="font-black uppercase mb-2 text-sm">AniList Synchronisatie</h2>
+                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Direct koppelen zonder handmatig codes over te typen.</p>
+                            <button onclick="redirectToAniList()" class="block w-full bg-white text-black text-center font-black py-4 rounded-xl text-[10px] uppercase tracking-widest">Koppel AniList Account</button>
+                        </div>
+                        <div class="card p-8 border border-white/5 text-center">
+                            <h2 class="font-black uppercase mb-4 text-sm">Importeer XML Bestanden</h2>
+                            <input type="file" id="xml-input" class="text-[10px] text-zinc-500 mb-6 block mx-auto">
+                            <button onclick="handleXML()" class="w-full bg-zinc-850 py-3 rounded-lg text-[10px] font-black uppercase border border-white/10">Upload Watchlist</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            else if (app.view === 'library') {
+                main.innerHTML = `<h2 class="text-xl font-black accent uppercase italic mb-6">Local Library</h2><div class="space-y-3">`;
+                if(!app.xmlLib.length) main.innerHTML += `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen XML data gevonden. Upload deze in het profiel.</p>`;
+                
+                // Groeperen op folder van de XML (Watching, Watched, Dropped)
+                let grouped = {'Watching': [], 'Watched': [], 'Dropped': []};
+                app.xmlLib.forEach(item => {
+                    const status = item.status || 'Watching';
+                    if (!grouped[status]) grouped[status] = [];
+                    grouped[status].push(item);
+                });
+
+                Object.keys(grouped).forEach(folder => {
+                    if (grouped[folder].length === 0) return;
+                    main.innerHTML += `<h3 class="text-[10px] font-black uppercase text-zinc-500 tracking-widest mt-6 mb-3">${folder} (${grouped[folder].length})</h3>`;
+                    grouped[folder].forEach(item => {
+                        main.innerHTML += `
+                            <button onclick="nav('watch', {id:${item.id}})" class="card w-full p-4 flex justify-between items-center text-[11px] font-black uppercase text-left mb-2">
+                                <span class="truncate pr-4 text-white">${item.title}</span>
+                                <i class="fa-solid fa-play accent text-[8px]"></i>
+                            </button>
+                        `;
+                    });
+                });
+                main.innerHTML += `</div>`;
+            }
+
+            else if (app.view === 'cloud') {
+                if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Koppel je account bij Profiel</p>`;
+                main.innerHTML = `<h2 class="text-xl font-black accent uppercase italic mb-6">Cloud List</h2><div id="c-list" class="grid grid-cols-2 gap-4"></div>`;
+                gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}}}}}}`, {u: app.user}).then(res => {
+                    const list = document.getElementById('c-list');
+                    if (!res || !res.data) return;
+                    res.data.MediaListCollection.lists.forEach(l => {
+                        l.entries.forEach(e => {
+                            const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
+                            list.innerHTML += `
+                                <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="text-left">
+                                    <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5 shadow-lg">
+                                        <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-40">
+                                        <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
+                                            <span class="text-[8px] font-black accent uppercase bg-black/80 px-2 py-1 rounded">Resume Ep ${e.progress+1}</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-[9px] font-black uppercase truncate text-zinc-400">${t}</p>
+                                </button>
+                            `;
+                        });
+                    });
+                });
+            }
+
+            else if (app.view === 'search') {
+                main.innerHTML = `
+                    <div class="max-w-md mx-auto mb-10">
+                        <input type="text" id="live-search" placeholder="Search title..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none font-bold text-sm focus:border-accent/40">
+                    </div>
+                    <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
+                `;
+            }
+
+            else {
+                // HOME VIEW
+                main.innerHTML = `
+                    ${app.recent.length ? `
+                        <h2 class="text-[10px] font-black uppercase mb-4 opacity-50 tracking-widest">Recently Watched</h2>
+                        <div class="flex gap-3 overflow-x-auto no-scrollbar mb-10">
+                            ${app.recent.map(r => `
+                                <button onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="flex-shrink-0 w-40 group text-left">
+                                    <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2">
+                                        <img src="${r.img}" class="w-full h-full object-cover opacity-40 group-hover:scale-105 transition-transform duration-500">
+                                        <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</div>
+                                    </div>
+                                    <p class="text-[9px] font-black uppercase truncate text-zinc-500 group-hover:text-white transition-colors">${r.title}</p>
+                                </button>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    <h2 class="text-xs font-black uppercase tracking-widest mb-6">Trending Now</h2>
+                    <div id="h-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
+                `;
+                gql(`query{Page(perPage:24){media(type:ANIME,sort:TRENDING_DESC){id title{romaji english}coverImage{large}}}}`).then(res => {
+                    const grid = document.getElementById('h-grid');
+                    if(!grid || !res.data) return;
+                    res.data.Page.media.forEach(m => {
+                        const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                        grid.innerHTML += `
+                            <button onclick="nav('watch', {id:${m.id}})" class="text-left group">
+                                <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
+                                    <img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                                </div>
+                                <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white transition-colors">${t}</p>
+                            </button>
+                        `;
+                    });
+                });
+            }
+        }
+
+        async function sync() {
+            if(!app.token) return alert("Koppel eerst je AniList account in je profiel!");
+            const q = `mutation($m:Int,$p:Int){SaveMediaListEntry(mediaId:$m,progress:$p,status:CURRENT){progress}}`;
+            const r = await gql(q, {m: parseInt(app.id), p: parseInt(app.ep)});
+            if(r && r.data) alert("Voortgang succesvol gesynchroniseerd met AniList!");
+            else alert("Sync mislukt. Probeer opnieuw in te loggen.");
+        }
+
+        function saveSet() {
+            app.user = document.getElementById('set-u').value;
+            app.lang = document.getElementById('set-l').value;
+            localStorage.setItem('ax_user', app.user);
+            localStorage.setItem('ax_lang', app.lang);
+            alert("Instellingen opgeslagen!");
+            render();
+        }
+
+        function redirectToAniList() {
+            const currentUrl = window.location.origin + window.location.pathname;
+            const authUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=20875&redirect_uri=${encodeURIComponent(currentUrl)}&response_type=token`;
+            window.location.href = authUrl;
+        }
+
+        function liveSearch(e) {
+            const val = e.target.value;
+            if(!val) return;
+            gql(`query($s:String){Page(perPage:18){media(search:$s,type:ANIME){id title{romaji english}coverImage{large}}}}`, {s: val}).then(res => {
+                const grid = document.getElementById('search-grid');
+                if(!grid || !res.data) return; grid.innerHTML = '';
+                res.data.Page.media.forEach(m => {
+                    const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                    grid.innerHTML += `
+                        <button onclick="nav('watch', {id:${m.id}})" class="text-left">
+                            <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
+                                <img src="${m.coverImage.large}" class="w-full h-full object-cover">
+                            </div>
+                            <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400">${t}</p>
+                        </button>
+                    `;
+                });
+            });
+        }
+
+        function handleXML() {
+            const file = document.getElementById('xml-input').files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = e => {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(e.target.result, "text/xml");
+                const folders = xmlDoc.getElementsByTagName("folder");
+                let data = [];
+                for(let folder of folders) {
+                    const statusName = folder.getElementsByTagName("name")[0].textContent;
+                    const items = folder.getElementsByTagName("item");
+                    for(let item of items) {
+                        const al = item.getElementsByTagName("al")[0].textContent;
+                        const idMatch = al.match(/anime\/(\d+)/);
+                        if(idMatch) {
+                            data.push({ id: idMatch[1], title: item.getElementsByTagName("name")[0].textContent, status: statusName });
+                        }
+                    }
+                }
+                app.xmlLib = data;
+                localStorage.setItem('ax_xml', JSON.stringify(data));
+                alert("Watchlist geïmporteerd!");
+                nav('library');
+            };
+            reader.readAsText(file);
+        }
+
+        // AutoPlay Unmute helper
+        document.body.addEventListener('click', () => {
+            const ifr = document.getElementById('player');
+            if(ifr) {
+                ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"unmute"}), "*");
+                ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"play"}), "*");
+            }
+        }, {once:true});
+
+        // Event Listener voor de Megaplay API (Auto Next)
+        window.addEventListener("message", e => {
+            let data = e.data;
+            if (typeof data === "string") { try { data = JSON.parse(data); } catch(err) {} }
+            if(data.event === "complete" && localStorage.getItem('amax_autonext') === 'true') {
+                nav('watch', {id: app.id, ep: app.ep + 1});
+            }
+        });
+
+        render();
+    </script>
+</body>
+</htm>
