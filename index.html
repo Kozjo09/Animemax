@@ -15,7 +15,7 @@
         .bg-accent { background: #cae962; color: #000; }
         .glass { background: rgba(15, 15, 15, 0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.05); }
         .card { background: #121212; border-radius: 18px; border: 1px solid rgba(255,255,255,0.03); transition: 0.2s; }
-        .card:active { transform: scale(0.97); border-color: #cae962; }
+        .card:hover { border-color: rgba(202, 233, 98, 0.3); }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         iframe { width: 100%; height: 100%; border: none; }
         
@@ -23,22 +23,20 @@
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
-        /* Toast Container met vaste mobiele marges (Perfect gecentreerd bovenaan) */
+        /* Toast Container perfect gecentreerd en mobiel vriendelijk */
         #toast-container {
             position: fixed;
-            top: 24px;
-            left: 0;
-            right: 0;
-            margin: 0 auto;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
             width: calc(100% - 32px);
-            max-width: 360px;
+            max-width: 380px;
             z-index: 10000;
             pointer-events: none;
         }
 
-        /* Vloeiende Slide-Down Animatie vanaf de bovenkant */
         @keyframes slideDown {
-            from { transform: translateY(-100%); opacity: 0; }
+            from { transform: translateY(-30px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
         .animate-toast { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
@@ -46,12 +44,12 @@
 </head>
 <body class="pb-32 relative">
 
-    <!-- Toast Meldingen Container -->
+    <!-- Toast Meldingen Container (Bovenaan gecentreerd) -->
     <div id="toast-container" class="flex flex-col gap-2"></div>
 
     <!-- Bevestigingsmodal -->
     <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10000] hidden items-center justify-center p-4">
-        <div class="bg-[#121212] border border-white/5 p-6 rounded-2xl max-w-sm w-full shadow-2xl">
+        <div class="bg-[#121212] border border-white/5 p-6 rounded-2xl max-w-sm w-full shadow-2xl animate-fade-in">
             <h3 id="confirm-title" class="text-lg font-black uppercase tracking-wider mb-2">Bevestigen</h3>
             <p id="confirm-message" class="text-zinc-400 text-xs leading-relaxed mb-6"></p>
             <div class="flex gap-3">
@@ -63,7 +61,7 @@
 
     <!-- Header (Zichtbaar na inloggen) -->
     <header id="app-header" class="sticky top-0 z-50 glass p-4 hidden">
-        <div class="flex items-center justify-between max-w-4xl mx-auto mb-4">
+        <div class="flex items-center justify-between max-w-4xl mx-auto mb-2">
             <button onclick="nav('home')" class="text-2xl font-black italic uppercase tracking-tighter">ANIME<span class="accent">MAX</span></button>
             <div class="flex gap-3 items-center">
                 <button onclick="nav('search')" class="w-10 h-10 rounded-full bg-[#121212] flex items-center justify-center border border-white/5"><i class="fa-solid fa-search text-xs"></i></button>
@@ -113,9 +111,6 @@
         // Trackt de exacte afspeeltijd van de actieve video lokaal
         let currentPlaybackTime = 0;
         let currentDuration = 0;
-
-        // Cache voor AniList poster-afbeeldingen en aflevering-aantallen
-        let mediaCache = {};
 
         // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
@@ -327,32 +322,6 @@
             }
         }
 
-        // Haalt metadata op van AniList en slaat het lokaal op in de cache om herhaalde API-calls te vermijden
-        async function fetchAnimeMetadata(anilistId) {
-            if (!anilistId) return null;
-            if (mediaCache[anilistId]) return mediaCache[anilistId];
-
-            const query = `
-                query($id: Int) {
-                    Media(id: $id, type: ANIME) {
-                        episodes
-                        coverImage {
-                            large
-                        }
-                    }
-                }
-            `;
-            const res = await gql(query, { id: parseInt(anilistId) });
-            if (res && res.data && res.data.Media) {
-                mediaCache[anilistId] = {
-                    episodes: res.data.Media.episodes || 12,
-                    coverImage: res.data.Media.coverImage.large
-                };
-                return mediaCache[anilistId];
-            }
-            return null;
-        }
-
         // --- NAVIGATIE & CLEANUP ---
         function nav(view, params = {}) {
             if (!sessionData) return showLoginPage('login');
@@ -560,7 +529,7 @@
                         });
                     }
 
-                    // Haal live anime-status en airing details op via AniList GraphQL
+                    // Haal live anime-status en details op via AniList
                     gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                         if (!res || !res.data) {
                             document.getElementById('w-title').innerText = "Informatie niet gevonden";
@@ -595,6 +564,7 @@
                             };
                         }
 
+                        // Automatisch hervatten
                         const activeRecent = app.recent.find(r => r.id == app.id && r.ep == app.ep);
                         if (activeRecent && activeRecent.time > 0) {
                             currentPlaybackTime = activeRecent.time;
@@ -785,7 +755,7 @@
                                 </div>
                             </div>
 
-                            <!-- EXPORT VAN DE COMPLETE CLOUD-DATABASE IN HIANIME XML FORMAT -->
+                            <!-- EXPORT NAAR HIANIME XML FORMAT -->
                             <div class="card p-8 border border-green-500/20 text-center">
                                 <h2 class="font-black uppercase mb-2 text-sm">Download Backup XML Exporteer</h2>
                                 <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Exporteer je cloud-database als een universeel XML-bestand compatibel met HiAnime!</p>
@@ -813,70 +783,16 @@
 
                         <!-- Horizontale Filters -->
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
-                            <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
-                            <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
-                            <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
-                            <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                            <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">All</button>
+                            <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Watching</button>
+                            <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Completed</button>
+                            <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Dropped</button>
                         </div>
 
-                        <div id="xml-display-grid" class="space-y-4 mt-2"></div>
+                        <div id="xml-display-grid" class="space-y-4 mt-2">Laden...</div>
                     `;
 
-                    const grid = document.getElementById('xml-display-grid');
-                    if(!app.xmlLib.length) {
-                        grid.innerHTML = `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen data gevonden. Importeer een XML/JSON bestand of begin met kijken!</p>`;
-                        return;
-                    }
-
-                    let filteredXml = app.xmlLib;
-                    if(app.libraryFilter !== 'All') {
-                        filteredXml = app.xmlLib.filter(item => item.status === app.libraryFilter);
-                    }
-
-                    if(filteredXml.length === 0) {
-                        grid.innerHTML = `<p class="opacity-20 text-xs text-center py-10 uppercase font-black">Geen items gevonden in deze map</p>`;
-                        return;
-                    }
-
-                    filteredXml.forEach(async item => {
-                        const cardId = `lib-card-${item.id}`;
-                        grid.innerHTML += `
-                            <div id="${cardId}" class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
-                                <div class="flex gap-4 items-center flex-1 min-w-0">
-                                    <!-- Poster-afbeelding van AniList gekoppeld via cache -->
-                                    <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=150'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
-                                    <div class="truncate pr-4 flex-1">
-                                        <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
-                                            <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: <span id="progress-val-${item.id}">${item.progress}</span> / <span id="eps-total-${item.id}">${item.episodes || '?'}</span></span>
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
-                                    <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-bold transition-colors flex items-center gap-1.5"><i class="fa-solid fa-play text-[10px]"></i> Watch</button>
-                                    <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-black">+1 Ep</button>
-                                    <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-3 rounded-xl text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
-                                    <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-3 rounded-xl text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
-                                </div>
-                            </div>
-                        `;
-
-                        // Vraag op de achtergrond de poster en de echte aflevering-aantallen op via AniList
-                        if (!item.coverImage || !item.episodes || item.episodes == 12) {
-                            const meta = await fetchAnimeMetadata(item.id);
-                            if (meta) {
-                                item.coverImage = meta.coverImage;
-                                item.episodes = meta.episodes;
-                                
-                                const imgEl = document.getElementById(`img-${item.id}`);
-                                const epsEl = document.getElementById(`eps-total-${item.id}`);
-                                if(imgEl) imgEl.src = meta.coverImage;
-                                if(epsEl) epsEl.innerText = meta.episodes;
-                            }
-                        }
-                    });
+                    renderLibraryGrid();
                 }
 
                 else if (app.view === 'cloud') {
@@ -888,15 +804,16 @@
                         </div>
                         
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
-                            <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All Lists</button>
-                            <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
-                            <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
-                            <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                            <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">All Lists</button>
+                            <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Watching</button>
+                            <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Completed</button>
+                            <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Dropped</button>
                         </div>
 
-                        <div id="c-list" class="grid grid-cols-2 gap-4">Laden...</div>
+                        <div id="c-list" class="grid grid-cols-2 sm:grid-cols-4 gap-4">Laden...</div>
                     `;
 
+                    // Gecachete AniList openbare synchronisatie
                     gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user}).then(res => {
                         const list = document.getElementById('c-list');
                         if (!res || !res.data || !res.data.MediaListCollection) {
@@ -977,6 +894,83 @@
             } catch(error) {
                 console.error("Fout tijdens renderen:", error);
             }
+        }
+
+        // --- BIBLIOTHEEK LAADPAGINA MET MULTI-QUERY COMBINATIE (Geen API-Crashes!) ---
+        async function renderLibraryGrid() {
+            const grid = document.getElementById('xml-display-grid');
+            if (!grid) return;
+
+            let filteredXml = app.xmlLib;
+            if(app.libraryFilter !== 'All') {
+                filteredXml = app.xmlLib.filter(item => item.status === app.libraryFilter);
+            }
+
+            if(filteredXml.length === 0) {
+                grid.className = "block text-center py-20 opacity-20";
+                grid.innerHTML = `<p class="text-xs uppercase font-black">Geen items gevonden in deze map</p>`;
+                return;
+            }
+
+            grid.className = "space-y-4 mt-2";
+            grid.innerHTML = '';
+
+            // 1. Render de kaarten onmiddellijk (met eventuele reeds opgeslagen cache!)
+            filteredXml.forEach(item => {
+                grid.innerHTML += `
+                    <div id="lib-card-${item.id}" class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
+                        <div class="flex gap-4 items-center flex-1 min-w-0">
+                            <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=150'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
+                            <div class="truncate pr-4 flex-1">
+                                <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
+                                    <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: <span id="progress-val-${item.id}">${item.progress}</span> / <span id="eps-total-${item.id}">${item.episodes || '?'}</span></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
+                            <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-bold transition-colors flex items-center gap-1.5"><i class="fa-solid fa-play text-[10px]"></i> Watch</button>
+                            <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-black">+1 Ep</button>
+                            <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-3 rounded-xl text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
+                            <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-3 rounded-xl text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                    </div>
+                `;
+            });
+
+            // 2. We halen de posters en afleveringen in kleine groepen op (On-Demand) om de API niet te crashen
+            const batchSize = 15;
+            const itemsNeedUpdate = filteredXml.filter(item => !item.coverImage || !item.episodes || item.episodes == 12);
+            
+            for (let i = 0; i < itemsNeedUpdate.length; i += batchSize) {
+                const batch = itemsNeedUpdate.slice(i, i + batchSize);
+                await Promise.all(batch.map(async item => {
+                    const meta = await fetchAnimeMetadata(item.id);
+                    if (meta) {
+                        item.coverImage = meta.coverImage;
+                        item.episodes = meta.episodes;
+                        
+                        // Als de gebruiker hem al gezien heeft (Watched), verhogen we de progressie direct naar het maximum!
+                        if (item.status === "Watched" && item.progress == 0) {
+                            item.progress = meta.episodes;
+                            const progVal = document.getElementById(`progress-val-${item.id}`);
+                            if (progVal) progVal.innerText = meta.episodes;
+                        }
+
+                        const imgEl = document.getElementById(`img-${item.id}`);
+                        const epsEl = document.getElementById(`eps-total-${item.id}`);
+                        if(imgEl) imgEl.src = meta.coverImage;
+                        if(epsEl) epsEl.innerText = meta.episodes;
+                    }
+                }));
+                // Wacht een halve seconde tussen groepen om de GraphQL-server tevreden te houden
+                await new Promise(r => setTimeout(r, 600));
+            }
+            
+            // Sla de ingeladen metadata direct lokaal en in je cloud-database op!
+            saveCloudData();
         }
 
         // --- FILTER FUNCTIES ---
@@ -1063,7 +1057,6 @@
             let xml = `<?xml version="1.0"?>\n`;
             xml += `<list>\n`;
             
-            // Groepeer watchlists terug in folders (HiAnime XML standaard!)
             const folders = ["Watched", "Watching", "Dropped", "Plan to Watch"];
             folders.forEach(folder => {
                 const items = app.xmlLib.filter(item => {
@@ -1107,7 +1100,7 @@
             window.showToast("XML Back-up gedownload!");
         };
 
-        // --- INTELLIGENTE XML EN JSON IMPORTEER-ENGINE (Met aflevering-detectie!) ---
+        // --- INTELLIGENTE XML EN JSON IMPORTEER-ENGINE ---
         window.handleXML = function() {
             const file = document.getElementById('xml-input').files[0];
             if(!file) return;
@@ -1140,12 +1133,11 @@
                                     const id = idMatch[1];
                                     const title = item.getElementsByTagName("name")[0].textContent;
                                     
-                                    // Bepaal de logische start-aflevering op basis van de XML mapnaam!
                                     let progress = 0;
                                     let episodes = 12; // Fallback
 
                                     if (statusName === "Watched") {
-                                        progress = 12; // Wordt later automatisch gesynct met het echte AniList maximum!
+                                        progress = 12; 
                                     }
 
                                     data.push({ 
@@ -1214,7 +1206,7 @@
             }
         }, {once:true});
 
-        // Event Listener voor Megaplay Auto Next
+        // --- EVENT LISTENER VOOR MEGAPLAY EVENTS ---
         window.addEventListener("message", e => {
             let data = e.data;
             if (typeof data === "string") { 
