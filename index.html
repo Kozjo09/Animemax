@@ -118,7 +118,7 @@
         let malCache = {};
         let mediaCache = {};
 
-        // Statische Trending Now Back-uplijst (Laadt ALTIJD direct, 100% rate-limit-proof)
+        // Statische Trending Now Back-uplijst
         const STATIC_TRENDING = [
             { id: 147105, title: "Witch Hat Atelier", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx147105-X98uGbyg64gD.png" },
             { id: 186333, title: "Kunon the Sorcerer Can See", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx186333-eWzW9l5y4Q5Z.png" },
@@ -335,7 +335,6 @@
                     window.showToast("Wachtwoord moet minimaal 6 tekens bevatten!", "error");
                     return;
                 }
-                
                 app.user = uInput;
 
                 const { data, error } = await sb.auth.signUp({ email, password: p });
@@ -395,7 +394,7 @@
                 }
             } else {
                 // RLS-FIXX: Omdat de gebruiker nu ingelogd is en een actieve tokensessie heeft,
-                // kunnen we zijn profielrij probleemloos initialiseren. Supabase RLS staat dit nu 100% foutloos toe!
+                // kunnen we zijn profielrij probleemloos initialiseren. Supabase RLS staat dit nu 100% toe!
                 app.user = sessionData.user.user_metadata?.full_name || sessionData.user.email.split('@')[0];
                 const { error: insertErr } = await sb.from('anime_users').insert([{
                     id: sessionData.user.id,
@@ -490,7 +489,7 @@
                 return await response.json();
             } catch (error) {
                 if (retries > 0) {
-                    console.log(`Verzoek mislukt of rate-limited. Retry over ${delay}ms...`);
+                    console.log("Verzoek mislukt of rate-limited. Retry...");
                     await new Promise(resolve => setTimeout(resolve, delay));
                     return fetchWithRetry(url, retries - 1, delay * 2.5); 
                 }
@@ -609,19 +608,39 @@
             saveCloudDataDebounced();
         }
 
-        // --- SLIMME AUTO WATCHLIST & PROGRESSIE SPREIDING (ZONDER KNOPPEN) ---
-        window.autoUpdateProgressOnEpClick = function(id, title, newEpisode, totalEpisodes, coverImage) {
+        // --- HANDMATIGE STATUS EN AFLEVERING PROGRESSIE-BEHEER-ENGINE ---
+        // VOORKOM OVER-SCHRIJVEN VAN DROPPED OF COMPLETED STATUS!
+        window.autoUpdateProgressOnEpClick = function(id, title, newEpisode, totalEpisodes, coverImage, customStatus = null) {
             let found = false;
+            
+            // Zoek of deze anime al in de bibliotheek staat en wat de huidige status is
+            const existingItem = app.xmlLib.find(item => item && item.id && item.id.toString() == id.toString());
+            
             let finalStatus = "Watching";
-
-            if (parseInt(newEpisode) >= parseInt(totalEpisodes)) {
+            
+            if (customStatus) {
+                // Als we expliciet een status doorgeven via de dropdown of profile, gebruiken we die direct!
+                finalStatus = customStatus;
+            } else if (existingItem) {
+                // Als de anime al bestaat:
+                if (existingItem.status === "Dropped") {
+                    // Behoud "Dropped" status, overschrijf deze NOOIT automatisch naar Watching!
+                    finalStatus = "Dropped";
+                } else if (parseInt(newEpisode) >= parseInt(totalEpisodes)) {
+                    // Automatisch completed als we de laatste ep bereiken
+                    finalStatus = "Watched";
+                } else {
+                    // Behoud anders de status van het item (bijv. Watching of Plan to Watch)
+                    finalStatus = existingItem.status;
+                }
+            } else if (parseInt(newEpisode) >= parseInt(totalEpisodes)) {
                 finalStatus = "Watched";
             }
 
             app.xmlLib = app.xmlLib.map(item => {
-                if (item.id == id) {
+                if (item && item.id && item.id.toString() == id.toString()) {
                     found = true;
-                    return { ...item, status: finalStatus, progress: parseInt(newEpisode), episodes: totalEpisodes, coverImage };
+                    return { ...item, status: finalStatus, progress: parseInt(newEpisode), episodes: totalEpisodes, coverImage: coverImage || item.coverImage };
                 }
                 return item;
             });
@@ -631,7 +650,27 @@
             }
 
             saveCloudDataDebounced();
-            window.showToast(`Opgeslagen: Ep ${newEpisode} (${finalStatus})`);
+            window.showToast(`Gesynct: ${finalStatus} - Ep ${newEpisode}/${totalEpisodes}`);
+            
+            // Update realtime de status weergave in de UI
+            const statusSpan = document.getElementById('local-status-span');
+            const statusText = document.getElementById('local-status-text');
+            if (statusSpan && statusText) {
+                statusSpan.innerText = finalStatus;
+                statusText.innerHTML = `<span class="accent" id="local-status-span">${finalStatus}</span> - Aflevering ${newEpisode} / ${totalEpisodes}`;
+            }
+        };
+
+        // Event handler voor handmatige select-dropdown op de watchpagina
+        window.onStatusDropdownChange = function(selectEl, id) {
+            const newStatus = selectEl.value;
+            const currentEp = app.ep || 1;
+            
+            const localAnime = app.xmlLib.find(item => item && item.id && item.id.toString() == id.toString()) || 
+                               app.recent.find(item => item && item.id && item.id.toString() == id.toString()) || 
+                               { title: document.getElementById('w-title')?.innerText || "Anime", episodes: 12, coverImage: "" };
+            
+            window.autoUpdateProgressOnEpClick(id, localAnime.title, currentEp, localAnime.episodes || 12, localAnime.coverImage || '', newStatus);
         };
 
         window.deleteLocalItem = function(id) {
@@ -650,7 +689,6 @@
         function startDubCheckTimer() {
             if (dubTimeout) clearTimeout(dubTimeout);
             
-            // Controleert of de fallback-instelling is ingeschakeld in de app-state
             if (app.mode === 'dub' && app.autoDubFallback !== false) {
                 dubTimeout = setTimeout(() => {
                     triggerDubFallback();
@@ -804,7 +842,7 @@
                             ` : ''}
                         </div>
 
-                        <!-- Live afspeeltijd indicator (Wordt nu realtime en perfect bijgewerkt!) -->
+                        <!-- Live afspeeltijd indicator -->
                         <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] text-zinc-500 font-bold font-sans">
                             <span class="flex items-center gap-1.5"><i class="fa-regular fa-clock accent"></i> HUIDIGE POSITIE: <span id="playback-time-text" class="text-white">0:00 / 0:00</span></span>
                             <span id="playback-progress-percentage" class="accent">0%</span>
@@ -826,14 +864,19 @@
 
                         <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">${localTitle}</h1>
                         
-                        <!-- Volledig herontworpen statuspaneel ZONDER AniList afhankelijkheid of 'Laden...' placeholders -->
+                        <!-- Premium dropdown selectie voor handmatig mapbeheer (Watching, Watched of Dropped) -->
                         <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between shadow-lg">
                             <div>
                                 <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud database)</p>
-                                <h3 id="local-status-text" class="text-xs font-bold mt-1 text-white"><span class="accent">${currentStatus}</span> - Aflevering ${userProgress} / ${localTotalEpisodes}</h3>
+                                <h3 id="local-status-text" class="text-xs font-bold mt-1 text-white"><span class="accent" id="local-status-span">${currentStatus}</span> - Aflevering ${userProgress} / ${localTotalEpisodes}</h3>
                             </div>
                             <div class="flex gap-2 items-center">
-                                <span class="text-[10px] text-zinc-400 font-bold uppercase bg-white/5 border border-white/10 px-3 py-2 rounded-xl"><i class="fa-solid fa-cloud-arrow-up accent mr-1"></i> Auto Saved</span>
+                                <select id="local-status-dropdown" onchange="window.onStatusDropdownChange(this, '${app.id}')" class="bg-black border border-white/10 p-2.5 rounded-xl text-xs font-bold text-white outline-none">
+                                    <option value="Watching" ${currentStatus==='Watching'?'selected':''}>Watching</option>
+                                    <option value="Watched" ${currentStatus==='Watched' || currentStatus==='Completed'?'selected':''}>Completed</option>
+                                    <option value="Dropped" ${currentStatus==='Dropped'?'selected':''}>Dropped</option>
+                                </select>
+                                <span class="text-[10px] text-zinc-400 font-bold uppercase bg-white/5 border border-white/10 px-3 py-2 rounded-xl hidden sm:inline-block"><i class="fa-solid fa-cloud-arrow-up accent mr-1"></i> Auto Saved</span>
                             </div>
                         </div>
 
@@ -849,7 +892,7 @@
                         grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
                     }
 
-                    // VOORKOM CRASHES: Beveilig de find op activeRecent zodat eventueel ontbrekende of null-rijen geen javascript crash geven!
+                    // VOORKOM CRASHES: Beveilig de find op activeRecent
                     const activeRecent = app.recent.find(r => r && r.id && r.id.toString() == app.id.toString() && r.ep == app.ep);
                     if (activeRecent && activeRecent.time > 0) {
                         currentPlaybackTime = activeRecent.time;
@@ -962,14 +1005,12 @@
                     }
 
                     app.recent.forEach(r => {
-                        // VOORKOM CRASHES: Controleer op eventuele null of lege items in history
                         if (!r) return;
                         
                         const hasProgress = r.time > 0 && r.duration > 0;
                         const percent = hasProgress ? Math.round((r.time / r.duration) * 100) : 0;
                         const remaining = hasProgress ? formatDuration(r.duration - r.time) : '';
 
-                        // EXACT HERSTELD: ID is veilig ingepakt in quotes zodat navigatie en de confirm-dialoog altijd werken!
                         grid.innerHTML += `
                             <div onclick="nav('watch', {id:'${r.id}', ep:${r.ep}})" class="group text-left animate-fade-in relative cursor-pointer">
                                 <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2 shadow-lg animate-fade-in">
@@ -1032,7 +1073,6 @@
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
-                                    <!-- FEATURE: Auto switch DUB naar SUB instelling toggle -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Auto switch DUB naar SUB na 3.5 sec</span>
                                         <input type="checkbox" id="set-autodub" class="toggle-checkbox hidden" ${app.autoDubFallback !== false ? 'checked' : ''}>
@@ -1104,12 +1144,12 @@
                             <span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span>
                         </div>
 
-                        <!-- Horizontale Filters -->
+                        <!-- Horizontale Filters met dynamische achtergrondkleur naargelang de status -->
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
-                            <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
-                            <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
-                            <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
-                            <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                            <button onclick="window.filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg font-black' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
+                            <button onclick="window.filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg font-black' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                            <button onclick="window.filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg font-black' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                            <button onclick="window.filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg font-black' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
                         </div>
 
                         <div id="xml-display-grid" class="space-y-4 mt-2">Laden...</div>
@@ -1121,7 +1161,7 @@
                 else if (app.view === 'search') {
                     main.innerHTML = `
                         <div class="max-w-md mx-auto mb-10">
-                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:accent text-white font-bold">
+                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
                         </div>
                         <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
                     `;
@@ -1152,7 +1192,6 @@
                             grid.innerHTML = ''; 
                             res.data.Page.media.forEach(m => {
                                 const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
-                                // EXACT HERSTELD: ID ingepakt in single-quotes! Dit voorkomt fouten bij navigatie vanaf homepagina!
                                 grid.innerHTML += `
                                     <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-toast">
                                         <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
@@ -1170,35 +1209,45 @@
             }
         }
 
-        // --- BIBLIOTHEEK LAADPAGINA MET LOKALE CACHE EN TRAGE BATCHING (GEEN RATE LIMIT CRASHES!) ---
+        // --- BIBLIOTHEEK LAADPAGINA ---
         async function renderLibraryGrid() {
             const grid = document.getElementById('xml-display-grid');
             if (!grid) return;
 
+            // Filter de lijst op basis van de geselecteerde filter tab
             let filteredXml = app.xmlLib;
-            if(app.libraryFilter !== 'All') {
-                filteredXml = app.xmlLib.filter(item => item.status === app.libraryFilter);
+            if (app.libraryFilter !== 'All') {
+                if (app.libraryFilter === 'Watched') {
+                    // Match op zowel "Watched" als "Completed"
+                    filteredXml = app.xmlLib.filter(item => item && (item.status === 'Watched' || item.status === 'Completed'));
+                } else {
+                    filteredXml = app.xmlLib.filter(item => item && item.status === app.libraryFilter);
+                }
             }
 
-            if(filteredXml.length === 0) {
+            if (filteredXml.length === 0) {
                 grid.className = "block text-center py-20 opacity-20";
-                grid.innerHTML = `<p class="text-xs uppercase font-black">Geen items gevonden in deze map</p>`;
+                grid.innerHTML = `<p class="text-xs uppercase font-black">Geen items gevonden in ${app.libraryFilter}</p>`;
                 return;
             }
 
             grid.className = "space-y-4 mt-2";
             grid.innerHTML = '';
 
-            // Render alle kaarten direct (gebruikt direct reeds gesyncte posters)
             filteredXml.forEach(item => {
+                if (!item) return;
+                
+                // Formatteer status-label
+                const displayStatus = item.status === 'Watched' ? 'COMPLETED' : item.status.toUpperCase();
+
                 grid.innerHTML += `
                     <div id="lib-card-${item.id}" data-id="${item.id}" data-mal="${item.malId || ''}" class="lazy-card card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
                         <div class="flex gap-4 items-center flex-1 min-w-0">
-                            <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=300'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
+                            <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=150'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
                             <div class="truncate pr-4 flex-1">
                                 <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
                                 <div class="flex items-center gap-2">
-                                    <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
+                                    <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${displayStatus}</span>
                                     <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: <span id="progress-val-${item.id}">${item.progress}</span> / <span id="eps-total-${item.id}">${item.episodes || '?'}</span></span>
                                 </div>
                             </div>
@@ -1216,7 +1265,6 @@
 
             if (lazyObserver) lazyObserver.disconnect();
 
-            // Lazy-loading observer om alleen te laden wat in beeld verschijnt (Uitsluitend MAL/Jikan API)
             lazyObserver = new IntersectionObserver(async (entries) => {
                 for (let entry of entries) {
                     if (entry.isIntersecting) {
@@ -1226,9 +1274,8 @@
                         
                         lazyObserver.unobserve(card);
 
-                        const item = app.xmlLib.find(it => it.id.toString() == id.toString());
+                        const item = app.xmlLib.find(it => it && it.id && it.id.toString() == id.toString());
                         if (item && (!item.coverImage || !item.episodes || item.episodes == 12)) {
-                            // Exclusieve MAL/Jikan fetcher met Supabase Cloud-database Caching
                             const meta = await fetchMyAnimeListMetadata(id, malId, item.title);
                             if (meta) {
                                 item.coverImage = meta.coverImage;
@@ -1254,326 +1301,17 @@
 
             document.querySelectorAll('.lazy-card').forEach(card => {
                 const id = card.getAttribute('data-id');
-                const item = app.xmlLib.find(it => id.toString() == id.toString());
+                const item = app.xmlLib.find(it => it && it.id && it.id.toString() == id.toString());
                 if (item && (!item.coverImage || !item.episodes || item.episodes == 12)) {
                     lazyObserver.observe(card);
                 }
             });
         }
 
-        // --- FILTER FUNCTIES ---
         window.filterXml = function(status) {
             app.libraryFilter = status;
-            render();
+            render(); // Herlaadt de library met de gefilterde lijst
         };
-
-        // --- BIBLIOTHEEK ACTIEHULPJES ---
-        window.quickIncrement = function(id) {
-            const item = app.xmlLib.find(item => item.id.toString() == id.toString());
-            if (!item) return;
-            const nextProgress = parseInt(item.progress || 0) + 1;
-            window.autoUpdateProgressOnEpClick(id, item.title, nextProgress, item.episodes || 12, item.coverImage || '');
-            render();
-        };
-
-        window.changeLocalFolderPrompt = function(id) {
-            const item = app.xmlLib.find(i => i.id.toString() == id.toString());
-            if (!item) return;
-            const newStatus = prompt("Typ een nieuwe status (Watching, Watched, Dropped):", item.status);
-            if (newStatus && ["Watching", "Watched", "Dropped"].includes(newStatus)) {
-                window.autoUpdateProgressOnEpClick(id, item.title, item.progress, item.episodes || 12, item.coverImage || '');
-                item.status = newStatus;
-                saveCloudDataDebounced();
-                render();
-            } else if (newStatus) {
-                window.showToast("Ongeldige status! Gebruik Watching, Watged of Dropped.", "error");
-            }
-        };
-
-        // --- SKIP INTRO ---
-        window.skipIntroTime = function() {
-            const player = document.getElementById('player');
-            if (player) {
-                player.contentWindow.postMessage(JSON.stringify({
-                    event: "command",
-                    command: "seek",
-                    value: app.skipSeconds
-                }), "*");
-                window.showToast(`Intro overgeslagen (+${app.skipSeconds}s)`);
-            }
-        };
-
-        // --- SAVE SETTINGS ---
-        window.saveSet = function() {
-            const setContinueEl = document.getElementById('set-continue');
-            const setAutoplayEl = document.getElementById('set-autoplay');
-            const setAutonextEl = document.getElementById('set-autonext');
-            const setAutoskipEl = document.getElementById('set-autoskip');
-            const setSecondsEl = document.getElementById('set-seconds');
-            const setUsernameEl = document.getElementById('set-user');
-            const setAutodubEl = document.getElementById('set-autodub');
-            const langCheckedEl = document.querySelector('input[name="lang"]:checked');
-            const audioCheckedEl = document.querySelector('input[name="audio"]:checked');
-
-            if (setUsernameEl) app.user = setUsernameEl.value.trim();
-            if (langCheckedEl) app.lang = langCheckedEl.value;
-            if (audioCheckedEl) app.defaultAudio = audioCheckedEl.value;
-            if (setContinueEl) app.showContinue = setContinueEl.checked;
-            if (setAutoplayEl) app.autoPlay = setAutoplayEl.checked;
-            if (setAutonextEl) app.autoNext = setAutonextEl.checked;
-            if (setAutoskipEl) app.autoSkipIntro = setAutoskipEl.checked;
-            if (setAutodubEl) app.autoDubFallback = setAutodubEl.checked;
-            
-            if (setSecondsEl) {
-                const secondsVal = parseInt(setSecondsEl.value);
-                app.skipSeconds = isNaN(secondsVal) ? 5 : secondsVal;
-            }
-
-            saveCloudData();
-            window.showToast("Instellingen opgeslagen!");
-            render();
-        };
-
-        // --- LIVE ANIME SEARCH ---
-        window.liveSearch = function(e) {
-            const val = e.target.value;
-            if(!val) return;
-            gql(`query($s:String){Page(perPage:18){media(search:$s,type:ANIME){id title{romaji english}coverImage{large}}}}`, {s: val}).then(res => {
-                const grid = document.getElementById('search-grid');
-                if(!grid || !res || !res.data) return; grid.innerHTML = '';
-                res.data.Page.media.forEach(m => {
-                    const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
-                    grid.innerHTML += `
-                        <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-toast">
-                            <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
-                                <img src="${m.coverImage.large}" class="w-full h-full object-cover">
-                            </div>
-                            <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400">${t}</p>
-                        </button>
-                    `;
-                });
-            });
-        };
-
-        // --- XML BACKUP DOWNLOADER (HIANIME FORMAT) ---
-        window.exportMyAnimeListXML = function() {
-            if(!app.xmlLib.length) {
-                window.showToast("Geen items in je bibliotheek om te exporteren!", "error");
-                return;
-            }
-
-            let xml = `<?xml version="1.0"?>\n`;
-            xml += `<list>\n`;
-            
-            const folders = ["Watched", "Watching", "Dropped", "Plan to Watch"];
-            folders.forEach(folder => {
-                const items = app.xmlLib.filter(item => {
-                    if (folder === "Watching" && item.status === "Watching") return true;
-                    if (folder === "Watched" && item.status === "Watched") return true;
-                    if (folder === "Dropped" && item.status === "Dropped") return true;
-                    if (folder === "Plan to Watch" && item.status === "Plan to Watch") return true;
-                    return false;
-                });
-
-                if (items.length > 0) {
-                    xml += `  <folder>\n`;
-                    xml += `    <name>${folder}</name>\n`;
-                    xml += `    <data>\n`;
-                    
-                    items.forEach(item => {
-                        xml += `      <item>\n`;
-                        xml += `        <name>${item.title}</name>\n`;
-                        xml += `        <url>https://hianime.dk/watch/${item.id}</url>\n`;
-                        xml += `        <mal>https://myanimelist.net/anime/${item.id}</mal>\n`;
-                        xml += `        <al>https://anilist.co/anime/${item.id}</al>\n`;
-                        // FIX: no closing tag was present in original text.html
-                        xml += `      </item>\n`;
-                    });
-                    
-                    xml += `    </data>\n`;
-                    xml += `  </folder>\n`;
-                }
-            });
-
-            xml += `</list>\n`;
-
-            const blob = new Blob([xml], { type: "text/xml" });
-            const url = URL.createObjectURL(blob);
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.href = url;
-            downloadAnchor.download = `animemax_${app.user}_backup.xml`;
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-            URL.revokeObjectURL(url);
-            window.showToast("XML Back-up gedownload!");
-        };
-
-        // --- INTELLIGENTE XML EN JSON IMPORTEER-ENGINE ---
-        window.handleXML = function() {
-            const file = document.getElementById('xml-input').files[0];
-            if(!file) return;
-            const reader = new FileReader();
-            reader.onload = async e => {
-                const content = e.target.result;
-                try {
-                    const jsonData = JSON.parse(content);
-                    if (Array.isArray(jsonData)) {
-                        app.xmlLib = jsonData;
-                        saveCloudData();
-                        window.showToast("Database succesvol geïmporteerd!");
-                        nav('library');
-                        return;
-                    }
-                } catch(err) {
-                    const parser = new DOMParser();
-                    const xmlDoc = parser.parseFromString(content, "text/xml");
-                    
-                    const folders = xmlDoc.getElementsByTagName("folder");
-                    if (folders && folders.length > 0) {
-                        let data = [];
-                        for(let folder of folders) {
-                            const statusName = folder.getElementsByTagName("name")[0].textContent;
-                            const items = folder.getElementsByTagName("item");
-                            for(let item of items) {
-                                const alNode = item.getElementsByTagName("al")[0];
-                                const malNode = item.getElementsByTagName("mal")[0];
-                                let id = '';
-                                let malId = '';
-                                
-                                if (alNode) {
-                                    const idMatch = alNode.textContent.match(/anime\/(\d+)/);
-                                    if (idMatch) id = idMatch[1];
-                                }
-                                if (malNode) {
-                                    const malMatch = malNode.textContent.match(/anime\/(\d+)/);
-                                    if (malMatch) malId = malMatch[1];
-                                }
-
-                                if (id) {
-                                    const title = item.getElementsByTagName("name")[0].textContent;
-                                    let progress = 0;
-                                    let episodes = 12; 
-
-                                    if (statusName === "Watched") {
-                                        progress = 12; 
-                                    }
-
-                                    data.push({ 
-                                        id: id, 
-                                        malId: malId,
-                                        title: title, 
-                                        status: statusName, 
-                                        progress: progress, 
-                                        episodes: episodes,
-                                        coverImage: '' 
-                                    });
-                                }
-                            }
-                        }
-                        
-                        app.xmlLib = mergeWatchlists(app.xmlLib, data);
-                        saveCloudData();
-                        window.showToast("HiAnime database geïmporteerd!");
-                        nav('library');
-                        return;
-                    }
-
-                    // MyAnimeList XML importer
-                    const malAnimeList = xmlDoc.getElementsByTagName("anime");
-                    if (malAnimeList && malAnimeList.length > 0) {
-                        let data = [];
-                        for(let animeNode of malAnimeList) {
-                            const dbId = animeNode.getElementsByTagName("series_animedb_id")[0]?.textContent;
-                            const seriesTitleNode = animeNode.getElementsByTagName("series_title")[0];
-                            const title = seriesTitleNode ? seriesTitleNode.textContent : "Unknown Title";
-                            const watchedEps = animeNode.getElementsByTagName("my_watched_episodes")[0]?.textContent || "0";
-                            const totalEps = animeNode.getElementsByTagName("series_episodes")[0]?.textContent || "12";
-                            const myStatus = animeNode.getElementsByTagName("my_status")[0]?.textContent || "Watching";
-
-                            let statusStr = "Watching";
-                            if (myStatus.toLowerCase() === "completed" || myStatus.toLowerCase() === "completed") statusStr = "Watched";
-                            if (myStatus.toLowerCase() === "dropped") statusStr = "Dropped";
-                            if (myStatus.toLowerCase() === "plan to watch" || myStatus.toLowerCase() === "planning") statusStr = "Plan to Watch";
-
-                            if (dbId) {
-                                data.push({
-                                    id: dbId, malId: dbId, title: title, status: statusStr, progress: parseInt(watchedEps), episodes: parseInt(totalEps), coverImage: ''
-                                });
-                            }
-                        }
-                        app.xmlLib = mergeWatchlists(app.xmlLib, data);
-                        saveCloudData();
-                        window.showToast("MyAnimeList XML geïmporteerd!");
-                        nav('library');
-                        return;
-                    }
-
-                    window.showToast("Fout: XML formaat wordt niet herkend.", "error");
-                }
-            };
-            reader.readAsText(file);
-        }
-
-        // AutoPlay Fix
-        document.body.addEventListener('click', () => {
-            const ifr = document.getElementById('player');
-            if(ifr) {
-                ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"unmute"}), "*");
-                if (app.autoPlay) {
-                    ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"play"}), "*");
-                }
-            }
-        }, {once:true});
-
-        // --- EVENT LISTENER VOOR MEGAPLAY EVENTS (Perfect hersteld voor realtime timer!) ---
-        window.addEventListener("message", e => {
-            let data = e.data;
-            if (typeof data === "string") { 
-                try { data = JSON.parse(data); } catch(err) {} 
-            }
-            
-            // Controleer brede speler-events (zowel directe API properties als specifieke geneste timeupdates)
-            const eventType = data.event || data.type || '';
-            const currentTime = data.currentTime || data.value || (data.data ? data.data.currentTime : 0) || 0;
-            const duration = data.duration || (data.data ? data.data.duration : 0) || 0;
-
-            if (eventType === "timeupdate" || eventType === "time" || eventType === "progress") {
-                currentPlaybackTime = parseFloat(currentTime);
-                if (duration > 0) {
-                    currentDuration = parseFloat(duration);
-                }
-                
-                if (dubTimeout) {
-                    clearTimeout(dubTimeout);
-                    dubTimeout = null;
-                }
-
-                // Werk de indicator onmiddellijk en vloeiend in de UI bij
-                const timeText = document.getElementById('playback-time-text');
-                const progressPercent = document.getElementById('playback-progress-percentage');
-                
-                if (timeText && currentDuration > 0) {
-                    timeText.innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
-                    const percent = Math.min(100, Math.max(0, Math.round((currentPlaybackTime / currentDuration) * 100)));
-                    if (progressPercent) progressPercent.innerText = `${percent}%`;
-                }
-            }
-
-            if (data.event === "error" && app.mode === "dub") {
-                triggerDubFallback();
-            }
-
-            if(eventType === "complete" && app.autoNext) {
-                saveCurrentVideoTime();
-                const nextEp = app.ep + 1;
-                const localItem = app.xmlLib.find(item => item && item.id && item.id.toString() == app.id.toString());
-                if (localItem) {
-                    window.autoUpdateProgressOnEpClick(app.id, localItem.title, nextEp, localItem.episodes || 12, localItem.coverImage || '');
-                }
-                nav('watch', {id: app.id, ep: nextEp});
-            }
-        });
     </script>
 </body>
     </html>
