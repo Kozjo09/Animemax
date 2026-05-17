@@ -84,11 +84,12 @@
     </main>
 
     <!-- Bottom Navigatiebalk -->
-    <nav id="app-navigation" class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-sm glass rounded-[2.5rem] p-2 flex justify-around items-center shadow-2xl z-[100] border border-white/10 hidden">
-        <button onclick="nav('home')" class="p-4 nav-link" id="nav-home"><i class="fa-solid fa-house"></i></button>
-        <button onclick="nav('cloud')" class="p-4 nav-link" id="nav-cloud"><i class="fa-solid fa-cloud"></i></button>
-        <button onclick="nav('library')" class="p-4 nav-link" id="nav-library"><i class="fa-solid fa-layer-group"></i></button>
-        <button onclick="nav('profile')" class="p-4 nav-link" id="nav-profile"><i class="fa-solid fa-user-ninja"></i></button>
+    <nav id="app-navigation" class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-md glass rounded-[2.5rem] p-2 flex justify-around items-center shadow-2xl z-[100] border border-white/10 hidden">
+        <button onclick="nav('home')" class="p-4 nav-link" id="nav-home" title="Home"><i class="fa-solid fa-house"></i></button>
+        <button onclick="nav('recent')" class="p-4 nav-link" id="nav-recent" title="Verder Kijken"><i class="fa-solid fa-clock-rotate-left"></i></button>
+        <button onclick="nav('cloud')" class="p-4 nav-link" id="nav-cloud" title="Cloud Sync"><i class="fa-solid fa-cloud"></i></button>
+        <button onclick="nav('library')" class="p-4 nav-link" id="nav-library" title="Bibliotheek"><i class="fa-solid fa-layer-group"></i></button>
+        <button onclick="nav('profile')" class="p-4 nav-link" id="nav-profile" title="Profiel & Instellingen"><i class="fa-solid fa-user-ninja"></i></button>
     </nav>
 
     <script>
@@ -100,6 +101,7 @@
         
         let sb = null;
         let sessionData = null;
+        let saveInterval = null;
 
         // Globale App Toestand
         let app = {
@@ -107,6 +109,13 @@
             user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 5, 
             defaultAudio: 'sub', recent: [], xmlLib: []
         };
+
+        // Trackt de exacte afspeeltijd van de actieve video lokaal
+        let currentPlaybackTime = 0;
+        let currentDuration = 0;
+
+        // Cache voor AniList poster-afbeeldingen en aflevering-aantallen
+        let mediaCache = {};
 
         // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
@@ -318,44 +327,144 @@
             }
         }
 
+        // Haalt metadata op van AniList en slaat het lokaal op in de cache om herhaalde API-calls te vermijden
+        async function fetchAnimeMetadata(anilistId) {
+            if (!anilistId) return null;
+            if (mediaCache[anilistId]) return mediaCache[anilistId];
+
+            const query = `
+                query($id: Int) {
+                    Media(id: $id, type: ANIME) {
+                        episodes
+                        coverImage {
+                            large
+                        }
+                    }
+                }
+            `;
+            const res = await gql(query, { id: parseInt(anilistId) });
+            if (res && res.data && res.data.Media) {
+                mediaCache[anilistId] = {
+                    episodes: res.data.Media.episodes || 12,
+                    coverImage: res.data.Media.coverImage.large
+                };
+                return mediaCache[anilistId];
+            }
+            return null;
+        }
+
+        // --- NAVIGATIE & CLEANUP ---
         function nav(view, params = {}) {
             if (!sessionData) return showLoginPage('login');
+            
+            if (app.view === 'watch' && app.id) {
+                saveCurrentVideoTime();
+            }
+            if (saveInterval) {
+                clearInterval(saveInterval);
+                saveInterval = null;
+            }
+
             app.view = view;
             app.id = params.id || null;
             app.ep = params.ep || 1;
             
             if (view === 'watch') {
                 app.mode = app.defaultAudio;
+                currentPlaybackTime = 0;
+                currentDuration = 0;
             }
             
             render();
             window.scrollTo(0,0);
         }
 
-        function saveRecent(id, title, img, ep) {
-            let rec = app.recent.filter(i => i.id != id);
-            rec.unshift({id, title, img, ep, ts: Date.now()});
+        function formatDuration(sec) {
+            if (!sec || isNaN(sec)) return "0:00";
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.floor(sec % 60);
+            const paddedS = s < 10 ? '0' + s : s;
+            if (h > 0) {
+                const paddedM = m < 10 ? '0' + m : m;
+                return `${h}:${paddedM}:${paddedS}`;
+            }
+            return `${m}:${paddedS}`;
+        }
+
+        // --- VERDER KIJKEN (RESUME) LOGICA ---
+        function saveCurrentVideoTime() {
+            if (app.view !== 'watch' || !app.id) return;
+            
+            let rec = app.recent.filter(i => i.id != app.id);
+            const currentItem = app.recent.find(i => i.id == app.id);
+            const img = currentItem ? currentItem.img : '';
+            const title = currentItem ? currentItem.title : 'Anime';
+
+            rec.unshift({
+                id: app.id,
+                title: title,
+                img: img,
+                ep: app.ep,
+                time: currentPlaybackTime,
+                duration: currentDuration,
+                ts: Date.now()
+            });
             app.recent = rec.slice(0, 12);
             saveCloudData();
         }
 
+        window.onbeforeunload = () => {
+            if (app.view === 'watch' && app.id) {
+                saveCurrentVideoTime();
+            }
+        };
+
+        function saveRecent(id, title, img, ep) {
+            let rec = app.recent.filter(i => i.id != id);
+            const existing = app.recent.find(i => i.id == id);
+            
+            const savedTime = (existing && existing.ep == ep) ? existing.time : 0;
+            const savedDuration = (existing && existing.ep == ep) ? existing.duration : 0;
+
+            rec.unshift({
+                id, title, img, ep, time: savedTime, duration: savedDuration, ts: Date.now()
+            });
+            app.recent = rec.slice(0, 12);
+            saveCloudData();
+        }
+
+        window.removeRecentAnime = function(event, id) {
+            event.stopPropagation();
+            window.showConfirm(
+                "Geschiedenis Verwijderen",
+                "Weet je zeker dat je deze anime wilt verwijderen uit je Verder Kijken geschiedenis?",
+                () => {
+                    app.recent = app.recent.filter(r => r.id != id);
+                    saveCloudData();
+                    window.showToast("Verwijderd uit geschiedenis!");
+                    render();
+                }
+            );
+        };
+
         // --- UPDATE WATCHLIST & EPISODES ---
-        window.updateLocalItem = function(id, title, status, progress, totalEpisodes = 12) {
+        window.updateLocalItem = function(id, title, status, progress, totalEpisodes = 12, coverImage = '') {
             let found = false;
             app.xmlLib = app.xmlLib.map(item => {
                 if (item.id == id) {
                     found = true;
-                    return { ...item, status, progress: parseInt(progress), episodes: totalEpisodes };
+                    return { ...item, status, progress: parseInt(progress), episodes: totalEpisodes, coverImage };
                 }
                 return item;
             });
 
             if (!found) {
-                app.xmlLib.push({ id: id.toString(), title: title, status: status, progress: parseInt(progress), episodes: totalEpisodes });
+                app.xmlLib.push({ id: id.toString(), title: title, status: status, progress: parseInt(progress), episodes: totalEpisodes, coverImage });
             }
 
             saveCloudData();
-            window.showToast("Opgeslagen in de cloud!");
+            window.showToast("Cloud bibliotheek bijgewerkt!");
             render();
         };
 
@@ -400,6 +509,12 @@
                             ` : ''}
                         </div>
 
+                        <!-- Live afspeeltijd indicator -->
+                        <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] text-zinc-500 font-bold">
+                            <span class="flex items-center gap-1.5"><i class="fa-regular fa-clock accent"></i> HUIDIGE POSITIE: <span id="playback-time-text" class="text-white">0:00</span></span>
+                            <span id="playback-progress-percentage" class="accent">0%</span>
+                        </div>
+
                         <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4 shadow-lg">
                             <div class="flex gap-2">
                                 <button onclick="app.mode='sub';render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Japans (Sub)</button>
@@ -407,7 +522,7 @@
                             </div>
                             <div class="flex items-center gap-4">
                                 <label class="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" id="toggle-autonext" class="toggle-checkbox hidden">
+                                    <input type="checkbox" id="toggle-autonext" class="toggle-checkbox hidden" ${app.autoNext ? 'checked' : ''}>
                                     <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     <span class="text-[9px] font-black uppercase text-zinc-400">Auto Next</span>
                                 </label>
@@ -438,11 +553,12 @@
                     `;
 
                     const autoNext = document.getElementById('toggle-autonext');
-                    autoNext.checked = app.autoNext;
-                    autoNext.addEventListener('change', e => { 
-                        app.autoNext = e.target.checked; 
-                        saveCloudData(); 
-                    });
+                    if (autoNext) {
+                        autoNext.addEventListener('change', e => { 
+                            app.autoNext = e.target.checked; 
+                            saveCloudData(); 
+                        });
+                    }
 
                     // Haal live anime-status en airing details op via AniList GraphQL
                     gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
@@ -462,7 +578,6 @@
                         const progressInput = document.getElementById('local-progress-input');
                         const saveBtn = document.getElementById('local-save-btn');
 
-                        // Vind jouw totale voortgang (afgerond)
                         const userProgress = localItem ? parseInt(localItem.progress) : 0;
 
                         if (localItem) {
@@ -474,11 +589,42 @@
                             progressInput.value = app.ep;
                         }
 
-                        saveBtn.onclick = () => {
-                            window.updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12);
-                        };
+                        if (saveBtn) {
+                            saveBtn.onclick = () => {
+                                window.updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12, m.coverImage.large);
+                            };
+                        }
 
-                        // Dynamische berekening van het aantal reeds uitgezonden afleveringen
+                        const activeRecent = app.recent.find(r => r.id == app.id && r.ep == app.ep);
+                        if (activeRecent && activeRecent.time > 0) {
+                            currentPlaybackTime = activeRecent.time;
+                            currentDuration = activeRecent.duration || 0;
+                            
+                            const progressPercent = currentDuration > 0 ? Math.round((currentPlaybackTime / currentDuration) * 100) : 0;
+                            document.getElementById('playback-time-text').innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
+                            const percentEl = document.getElementById('playback-progress-percentage');
+                            if(percentEl) percentEl.innerText = `${progressPercent}%`;
+
+                            setTimeout(() => {
+                                const player = document.getElementById('player');
+                                if (player) {
+                                    player.contentWindow.postMessage(JSON.stringify({
+                                        event: "command",
+                                        command: "seek",
+                                        value: currentPlaybackTime
+                                    }), "*");
+                                    window.showToast(`Hervat vanaf ${formatDuration(currentPlaybackTime)}!`);
+                                }
+                            }, 2500);
+                        }
+
+                        if (saveInterval) clearInterval(saveInterval);
+                        saveInterval = setInterval(() => {
+                            if (currentPlaybackTime > 0) {
+                                saveCurrentVideoTime();
+                            }
+                        }, 5000);
+
                         let totalEpisodes = m.episodes || 12;
                         let airedEpisodes = totalEpisodes;
 
@@ -489,23 +635,19 @@
                         }
 
                         const grid = document.getElementById('ep-grid');
-                        grid.innerHTML = ''; // Maak leeg voor opbouw
+                        grid.innerHTML = ''; 
                         
                         for(let i = 1; i <= totalEpisodes; i++) {
                             let btnClass = "";
                             let disabledAttr = "";
 
                             if (i == app.ep) {
-                                // Huidige aflevering die je NU kijkt -> LICHTGROEN (Accent)
                                 btnClass = "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20";
                             } else if (i <= userProgress) {
-                                // Reeds bekeken afleveringen -> DONKERGROEN
                                 btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
                             } else if (i <= airedEpisodes) {
-                                // Uitgezonden maar nog niet gezien -> LICHTGRIJS
                                 btnClass = "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
                             } else {
-                                // Nog niet uitgezonden aflevering -> ZWART / NIET INTERACTIEF
                                 btnClass = "bg-[#0b0b0b] text-zinc-700 border border-white/5 cursor-not-allowed pointer-events-none";
                                 disabledAttr = "disabled";
                             }
@@ -529,6 +671,56 @@
                     });
                 }
 
+                else if (app.view === 'recent') {
+                    main.innerHTML = `
+                        <div class="flex items-center justify-between mb-8 animate-fade-in">
+                            <h2 class="text-xl font-black accent uppercase italic">Verder Kijken</h2>
+                            <span class="text-[10px] text-zinc-500 uppercase font-black">${app.recent.length} items</span>
+                        </div>
+
+                        <div id="recent-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-4"></div>
+                    `;
+
+                    const grid = document.getElementById('recent-grid');
+                    if (!app.recent.length) {
+                        grid.className = "block text-center py-20 opacity-25";
+                        grid.innerHTML = '<p class="text-xs uppercase font-black tracking-widest">Nog geen kijkgeschiedenis gevonden</p>';
+                        return;
+                    }
+
+                    app.recent.forEach(r => {
+                        const hasProgress = r.time > 0 && r.duration > 0;
+                        const percent = hasProgress ? Math.round((r.time / r.duration) * 100) : 0;
+                        const remaining = hasProgress ? formatDuration(r.duration - r.time) : '';
+
+                        grid.innerHTML += `
+                            <div onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="group text-left animate-fade-in relative cursor-pointer">
+                                <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2 shadow-lg animate-fade-in">
+                                    <img src="${r.img || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=300'}" class="w-full h-full object-cover opacity-45 group-hover:scale-105 transition-transform duration-500">
+                                    
+                                    <div class="absolute inset-0 flex flex-col justify-between p-2">
+                                        <span class="self-start bg-black/85 px-1.5 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</span>
+                                        ${hasProgress ? `
+                                            <span class="self-start text-[7px] font-black bg-black/60 px-1.5 py-0.5 rounded text-zinc-400">Nog ${remaining}</span>
+                                        ` : ''}
+                                    </div>
+
+                                    ${hasProgress ? `
+                                        <div class="absolute bottom-0 left-0 w-full h-1 bg-white/10">
+                                            <div class="h-full bg-[#cae962]" style="width: ${percent}%"></div>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                                <p class="text-[9px] font-black uppercase truncate text-zinc-400 group-hover:text-white transition-colors pl-1">${r.title}</p>
+                                
+                                <button onclick="removeRecentAnime(event, ${r.id})" class="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-red-600/90 text-white flex items-center justify-center border border-black shadow-lg transition-all active:scale-75 z-50 hover:bg-red-500">
+                                    <i class="fa-solid fa-xmark text-[10px] font-black"></i>
+                                </button>
+                            </div>
+                        `;
+                    });
+                }
+
                 else if (app.view === 'profile') {
                     main.innerHTML = `
                         <div class="max-w-md mx-auto space-y-6 animate-fade-in">
@@ -539,41 +731,35 @@
                                 </div>
                                 
                                 <div class="space-y-4">
-                                    <!-- Continue Watching instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Show continue watching on home</span>
                                         <input type="checkbox" id="set-continue" class="toggle-checkbox hidden" ${app.showContinue?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
-                                    <!-- Auto Play instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Auto Play video</span>
                                         <input type="checkbox" id="set-autoplay" class="toggle-checkbox hidden" ${app.autoPlay?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
-                                    <!-- Auto Next instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Auto Next episode</span>
                                         <input type="checkbox" id="set-autonext" class="toggle-checkbox hidden" ${app.autoNext?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
-                                    <!-- Auto Skip Intro instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Enable skip intro button</span>
                                         <input type="checkbox" id="set-autoskip" class="toggle-checkbox hidden" ${app.autoSkipIntro?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
-                                    <!-- Skip intro seconden -->
                                     <div class="flex items-center justify-between p-2">
                                         <span class="text-xs font-black uppercase text-zinc-400">Skip intro seconds</span>
                                         <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs outline-none font-sans">
                                     </div>
 
-                                    <!-- Standaard Audio (Sub of Dub) -->
                                     <div class="flex items-center justify-between p-2 border-t border-white/5 pt-4">
                                         <span class="text-xs font-black uppercase text-zinc-400">Default Audio</span>
                                         <div class="flex gap-4">
@@ -582,7 +768,6 @@
                                         </div>
                                     </div>
 
-                                    <!-- Taal anime titels -->
                                     <div class="flex items-center justify-between p-2">
                                         <span class="text-xs font-black uppercase text-zinc-400">Language for Anime Name</span>
                                         <div class="flex gap-4">
@@ -591,7 +776,6 @@
                                         </div>
                                     </div>
 
-                                    <!-- AniList username sync -->
                                     <div class="p-2 border-t border-white/5 pt-4">
                                         <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username (Voor openbare sync)</label>
                                         <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
@@ -601,12 +785,12 @@
                                 </div>
                             </div>
 
-                            <!-- EXPORT NAAR MYANIMELIST XML COMPATIBEL FORMAAT -->
+                            <!-- EXPORT VAN DE COMPLETE CLOUD-DATABASE IN HIANIME XML FORMAT -->
                             <div class="card p-8 border border-green-500/20 text-center">
-                                <h2 class="font-black uppercase mb-2 text-sm">Download MAL-XML Exporteer</h2>
-                                <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Exporteer je eigen cloud-database direct als MyAnimeList XML-bestand!</p>
+                                <h2 class="font-black uppercase mb-2 text-sm">Download Backup XML Exporteer</h2>
+                                <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Exporteer je cloud-database als een universeel XML-bestand compatibel met HiAnime!</p>
                                 <button onclick="exportMyAnimeListXML()" class="block w-full bg-zinc-900 hover:bg-accent hover:text-black text-white font-black py-4 rounded-xl text-[10px] uppercase tracking-widest border border-white/15 transition-all">
-                                    <i class="fa-solid fa-file-export mr-1.5"></i> Download MyAnimeList XML
+                                    <i class="fa-solid fa-file-export mr-1.5"></i> Download XML Back-up
                                 </button>
                             </div>
 
@@ -635,7 +819,7 @@
                             <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
                         </div>
 
-                        <div id="xml-display-grid" class="space-y-3 mt-2"></div>
+                        <div id="xml-display-grid" class="space-y-4 mt-2"></div>
                     `;
 
                     const grid = document.getElementById('xml-display-grid');
@@ -654,25 +838,44 @@
                         return;
                     }
 
-                    filteredXml.forEach(item => {
+                    filteredXml.forEach(async item => {
+                        const cardId = `lib-card-${item.id}`;
                         grid.innerHTML += `
-                            <div class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-white/5 shadow-md animate-fade-in">
-                                <div class="truncate pr-4 flex-1">
-                                    <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
-                                    <div class="flex items-center gap-2">
-                                        <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
-                                        <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: ${item.progress} / ${item.episodes || '?'}</span>
+                            <div id="${cardId}" class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
+                                <div class="flex gap-4 items-center flex-1 min-w-0">
+                                    <!-- Poster-afbeelding van AniList gekoppeld via cache -->
+                                    <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=150'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
+                                    <div class="truncate pr-4 flex-1">
+                                        <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
+                                            <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: <span id="progress-val-${item.id}">${item.progress}</span> / <span id="eps-total-${item.id}">${item.episodes || '?'}</span></span>
+                                        </div>
                                     </div>
                                 </div>
                                 
-                                <div class="flex items-center gap-2 self-end sm:self-auto">
-                                    <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black p-2.5 rounded-lg text-xs text-zinc-400 transition-colors"><i class="fa-solid fa-play"></i> Watch</button>
-                                    <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400 font-black" title="Volgende aflevering">+1 Ep</button>
-                                    <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
-                                    <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-2.5 rounded-lg text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
+                                <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
+                                    <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-bold transition-colors flex items-center gap-1.5"><i class="fa-solid fa-play text-[10px]"></i> Watch</button>
+                                    <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-black">+1 Ep</button>
+                                    <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-3 rounded-xl text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
+                                    <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-3 rounded-xl text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
                                 </div>
                             </div>
                         `;
+
+                        // Vraag op de achtergrond de poster en de echte aflevering-aantallen op via AniList
+                        if (!item.coverImage || !item.episodes || item.episodes == 12) {
+                            const meta = await fetchAnimeMetadata(item.id);
+                            if (meta) {
+                                item.coverImage = meta.coverImage;
+                                item.episodes = meta.episodes;
+                                
+                                const imgEl = document.getElementById(`img-${item.id}`);
+                                const epsEl = document.getElementById(`eps-total-${item.id}`);
+                                if(imgEl) imgEl.src = meta.coverImage;
+                                if(epsEl) epsEl.innerText = meta.episodes;
+                            }
+                        }
                     });
                 }
 
@@ -750,22 +953,8 @@
                 }
 
                 else {
-                    // HOME VIEW (Continue Watching + Trending)
+                    // HOME VIEW (Uitsluitend Trending Now!)
                     main.innerHTML = `
-                        ${app.showContinue && app.recent.length ? `
-                            <h2 class="text-[10px] font-black uppercase mb-4 opacity-50 tracking-widest">Continue Watching (Cloud)</h2>
-                            <div class="flex gap-3 overflow-x-auto no-scrollbar mb-10">
-                                ${app.recent.map(r => `
-                                    <button onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="flex-shrink-0 w-40 group text-left animate-fade-in">
-                                        <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2">
-                                            <img src="${r.img}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-500">
-                                            <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</div>
-                                        </div>
-                                        <p class="text-[9px] font-black uppercase truncate text-zinc-400 group-hover:text-white transition-colors">${r.title}</p>
-                                    </button>
-                                `).join('')}
-                            </div>
-                        ` : ''}
                         <h2 class="text-xs font-black uppercase tracking-widest mb-6">Trending Now</h2>
                         <div id="h-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
                     `;
@@ -790,7 +979,18 @@
             }
         }
 
-        // --- SKIP INTRO LOGICA (Zowel handmatig als auto-skip) ---
+        // --- FILTER FUNCTIES ---
+        window.filterXml = function(status) {
+            app.libraryFilter = status;
+            render();
+        };
+
+        window.filterCloud = function(status) {
+            app.cloudFilter = status;
+            render();
+        };
+
+        // --- SKIP INTRO ---
         window.skipIntroTime = function() {
             const player = document.getElementById('player');
             if (player) {
@@ -803,7 +1003,7 @@
             }
         };
 
-        // --- SAVE PROFILE SETTINGS ---
+        // --- SAVE SETTINGS ---
         window.saveSet = function() {
             const setContinueEl = document.getElementById('set-continue');
             const setAutoplayEl = document.getElementById('set-autoplay');
@@ -853,12 +1053,66 @@
             });
         };
 
-        // --- XML EN JSON WATCHLIST IMPORTEER-ENGINE (HiAnime & MyAnimeList) ---
+        // --- XML BACKUP DOWNLOADER (HIANIME FORMAT) ---
+        window.exportMyAnimeListXML = function() {
+            if(!app.xmlLib.length) {
+                window.showToast("Geen items in je bibliotheek om te exporteren!", "error");
+                return;
+            }
+
+            let xml = `<?xml version="1.0"?>\n`;
+            xml += `<list>\n`;
+            
+            // Groepeer watchlists terug in folders (HiAnime XML standaard!)
+            const folders = ["Watched", "Watching", "Dropped", "Plan to Watch"];
+            folders.forEach(folder => {
+                const items = app.xmlLib.filter(item => {
+                    if (folder === "Watching" && item.status === "Watching") return true;
+                    if (folder === "Watched" && item.status === "Watched") return true;
+                    if (folder === "Dropped" && item.status === "Dropped") return true;
+                    if (folder === "Plan to Watch" && item.status === "Plan to Watch") return true;
+                    return false;
+                });
+
+                if (items.length > 0) {
+                    xml += `  <folder>\n`;
+                    xml += `    <name>${folder}</name>\n`;
+                    xml += `    <data>\n`;
+                    
+                    items.forEach(item => {
+                        xml += `      <item>\n`;
+                        xml += `        <name>${item.title}</name>\n`;
+                        xml += `        <url>https://hianime.dk/watch/${item.id}</url>\n`;
+                        xml += `        <mal>https://myanimelist.net/anime/${item.id}</mal>\n`;
+                        xml += `        <al>https://anilist.co/anime/${item.id}</al>\n`;
+                        xml += `      </item>\n`;
+                    });
+                    
+                    xml += `    </data>\n`;
+                    xml += `  </folder>\n`;
+                }
+            });
+
+            xml += `</list>\n`;
+
+            const blob = new Blob([xml], { type: "text/xml" });
+            const url = URL.createObjectURL(blob);
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.href = url;
+            downloadAnchor.download = `animemax_${app.user}_backup.xml`;
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+            URL.revokeObjectURL(url);
+            window.showToast("XML Back-up gedownload!");
+        };
+
+        // --- INTELLIGENTE XML EN JSON IMPORTEER-ENGINE (Met aflevering-detectie!) ---
         window.handleXML = function() {
             const file = document.getElementById('xml-input').files[0];
             if(!file) return;
             const reader = new FileReader();
-            reader.onload = e => {
+            reader.onload = async e => {
                 const content = e.target.result;
                 try {
                     const jsonData = JSON.parse(content);
@@ -873,35 +1127,6 @@
                     const parser = new DOMParser();
                     const xmlDoc = parser.parseFromString(content, "text/xml");
                     
-                    const malAnimeList = xmlDoc.getElementsByTagName("anime");
-                    if (malAnimeList && malAnimeList.length > 0) {
-                        let data = [];
-                        for(let animeNode of malAnimeList) {
-                            const dbId = animeNode.getElementsByTagName("series_animedb_id")[0]?.textContent;
-                            const seriesTitleNode = animeNode.getElementsByTagName("series_title")[0];
-                            const title = seriesTitleNode ? seriesTitleNode.textContent : "Unknown Title";
-                            const watchedEps = animeNode.getElementsByTagName("my_watched_episodes")[0]?.textContent || "0";
-                            const totalEps = animeNode.getElementsByTagName("series_episodes")[0]?.textContent || "0";
-                            const myStatus = animeNode.getElementsByTagName("my_status")[0]?.textContent || "Watching";
-
-                            let statusStr = "Watching";
-                            if (myStatus.toLowerCase() === "completed") statusStr = "Watched";
-                            if (myStatus.toLowerCase() === "dropped") statusStr = "Dropped";
-                            if (myStatus.toLowerCase() === "plan to watch" || myStatus.toLowerCase() === "planning") statusStr = "Plan to Watch";
-
-                            if (dbId) {
-                                data.push({
-                                    id: dbId, title: title, status: statusStr, progress: parseInt(watchedEps), episodes: parseInt(totalEps)
-                                });
-                            }
-                        }
-                        app.xmlLib = data;
-                        saveCloudData();
-                        window.showToast(`MyAnimeList XML geïmporteerd (${data.length} items)!`);
-                        nav('library');
-                        return;
-                    }
-
                     const folders = xmlDoc.getElementsByTagName("folder");
                     if (folders && folders.length > 0) {
                         let data = [];
@@ -912,15 +1137,62 @@
                                 const al = item.getElementsByTagName("al")[0].textContent;
                                 const idMatch = al.match(/anime\/(\d+)/);
                                 if(idMatch) {
+                                    const id = idMatch[1];
+                                    const title = item.getElementsByTagName("name")[0].textContent;
+                                    
+                                    // Bepaal de logische start-aflevering op basis van de XML mapnaam!
+                                    let progress = 0;
+                                    let episodes = 12; // Fallback
+
+                                    if (statusName === "Watched") {
+                                        progress = 12; // Wordt later automatisch gesynct met het echte AniList maximum!
+                                    }
+
                                     data.push({ 
-                                        id: idMatch[1], title: item.getElementsByTagName("name")[0].textContent, status: statusName, progress: 0, episodes: 12
+                                        id: id, 
+                                        title: title, 
+                                        status: statusName, 
+                                        progress: progress, 
+                                        episodes: episodes,
+                                        coverImage: '' 
                                     });
                                 }
                             }
                         }
+                        
                         app.xmlLib = data;
                         saveCloudData();
-                        window.showToast(`HiAnime XML geïmporteerd (${data.length} items)!`);
+                        window.showToast(`HiAnime database succesvol geïmporteerd (${data.length} items)!`);
+                        nav('library');
+                        return;
+                    }
+
+                    // MyAnimeList XML importer
+                    const malAnimeList = xmlDoc.getElementsByTagName("anime");
+                    if (malAnimeList && malAnimeList.length > 0) {
+                        let data = [];
+                        for(let animeNode of malAnimeList) {
+                            const dbId = animeNode.getElementsByTagName("series_animedb_id")[0]?.textContent;
+                            const seriesTitleNode = animeNode.getElementsByTagName("series_title")[0];
+                            const title = seriesTitleNode ? seriesTitleNode.textContent : "Unknown Title";
+                            const watchedEps = animeNode.getElementsByTagName("my_watched_episodes")[0]?.textContent || "0";
+                            const totalEps = animeNode.getElementsByTagName("series_episodes")[0]?.textContent || "12";
+                            const myStatus = animeNode.getElementsByTagName("my_status")[0]?.textContent || "Watching";
+
+                            let statusStr = "Watching";
+                            if (myStatus.toLowerCase() === "completed" || myStatus.toLowerCase() === "completed") statusStr = "Watched";
+                            if (myStatus.toLowerCase() === "dropped") statusStr = "Dropped";
+                            if (myStatus.toLowerCase() === "plan to watch" || myStatus.toLowerCase() === "planning") statusStr = "Plan to Watch";
+
+                            if (dbId) {
+                                data.push({
+                                    id: dbId, title: title, status: statusStr, progress: parseInt(watchedEps), episodes: parseInt(totalEps), coverImage: ''
+                                });
+                            }
+                        }
+                        app.xmlLib = data;
+                        saveCloudData();
+                        window.showToast(`MyAnimeList XML geïmporteerd (${data.length} items)!`);
                         nav('library');
                         return;
                     }
@@ -945,7 +1217,26 @@
         // Event Listener voor Megaplay Auto Next
         window.addEventListener("message", e => {
             let data = e.data;
-            if (typeof data === "string") { try { data = JSON.parse(data); } catch(err) {} }
+            if (typeof data === "string") { 
+                try { data = JSON.parse(data); } catch(err) {} 
+            }
+            
+            if (data.event === "timeupdate" || data.event === "time") {
+                currentPlaybackTime = parseFloat(data.currentTime || data.value || 0);
+                if (data.duration) {
+                    currentDuration = parseFloat(data.duration);
+                }
+                
+                const timeText = document.getElementById('playback-time-text');
+                const progressPercent = document.getElementById('playback-progress-percentage');
+                
+                if (timeText && currentDuration > 0) {
+                    timeText.innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
+                    const percent = Math.round((currentPlaybackTime / currentDuration) * 100);
+                    if (progressPercent) progressPercent.innerText = `${percent}%`;
+                }
+            }
+
             if(data.event === "complete" && app.autoNext) {
                 nav('watch', {id: app.id, ep: app.ep + 1});
             }
