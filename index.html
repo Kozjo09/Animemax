@@ -23,31 +23,18 @@
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
-        /* Toast Container met vaste mobiele marges (Perfect gecentreerd bovenaan) */
-        #toast-container {
-            position: fixed;
-            top: 24px;
-            left: 0;
-            right: 0;
-            margin: 0 auto;
-            width: calc(100% - 32px);
-            max-width: 360px;
-            z-index: 10000;
-            pointer-events: none;
-        }
-
-        /* Vloeiende Slide-Down Animatie vanaf de bovenkant */
+        /* Simpele, gegarandeerd werkende slide-down animatie voor toasts */
         @keyframes slideDown {
-            from { transform: translateY(-100%); opacity: 0; }
+            from { transform: translateY(-20px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
-        .animate-toast { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-toast { animation: slideDown 0.3s ease-out forwards; }
     </style>
 </head>
-<body class="pb-32">
+<body class="pb-32 relative">
 
-    <!-- Toast Meldingen Container -->
-    <div id="toast-container" class="flex flex-col gap-2"></div>
+    <!-- Toast Meldingen Container (Perfect gecentreerd bovenaan) -->
+    <div id="toast-container" class="fixed top-6 left-1/2 -translate-x-1/2 w-[90%] max-w-sm z-[9999] flex flex-col gap-2 pointer-events-none"></div>
 
     <!-- Bevestigingsmodal -->
     <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10000] hidden items-center justify-center p-4">
@@ -94,17 +81,18 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Jouw Supabase Database credentials
+        // Jouw werkende Supabase Database instellingen!
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
         let sb = null;
         let sessionData = null;
 
-        // Globale App Toestand (Onafhankelijk van database-vertraging!)
+        // Globale App Toestand
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', cloudFilter: 'All', libraryFilter: 'All',
-            user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 5, recent: [], xmlLib: []
+            user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 5, 
+            defaultAudio: 'sub', recent: [], xmlLib: []
         };
 
         // --- CUSTOM TOAST NOTIFICATIES ---
@@ -112,7 +100,7 @@
             const container = document.getElementById('toast-container');
             if(!container) return;
             const toast = document.createElement('div');
-            toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider mb-2 flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto w-full ${
+            toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto ${
                 type === 'error' ? 'bg-red-950/95 text-red-400 border-red-500/20' : 'bg-zinc-900/95 text-accent border-accent/20'
             }`;
             toast.innerHTML = `<span>${message}</span><button onclick="this.parentElement.remove()" class="ml-4 opacity-50 hover:opacity-100"><i class="fa-solid fa-times"></i></button>`;
@@ -146,6 +134,8 @@
             try {
                 if (typeof window.supabase !== 'undefined') {
                     sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+                } else if (typeof supabase !== 'undefined') {
+                    sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
                 } else {
                     throw new Error("Supabase library niet geladen");
                 }
@@ -153,7 +143,6 @@
                 const { data: { session } } = await sb.auth.getSession();
                 if (session) {
                     sessionData = session;
-                    // Probeer direct de user in te stellen vanuit de email
                     if(session.user && session.user.email) {
                         app.user = session.user.email.split('@')[0];
                     }
@@ -221,7 +210,7 @@
             if (!u || !p) return window.showToast("Vul alle velden in!", "error");
 
             const email = `${u.toLowerCase()}@animemax.local`;
-            app.user = u; // Meteen de username lokaal opslaan!
+            app.user = u; 
 
             if (type === 'reg') {
                 const { data, error } = await sb.auth.signUp({ email, password: p });
@@ -254,11 +243,11 @@
             const { data, error } = await sb.from('anime_users').select('*').eq('id', sessionData.user.id).single();
             
             if (data) {
-                // Hydrateer app state vanuit cloud
                 app.xmlLib = data.watchlist || [];
                 app.recent = data.recent || [];
                 if (data.settings) {
-                    app.mode = data.settings.mode || 'sub';
+                    app.defaultAudio = data.settings.defaultAudio || 'sub';
+                    app.mode = app.defaultAudio; // Zet de start-modus naar de voorkeur van de gebruiker
                     app.user = data.settings.user || app.user;
                     app.showContinue = data.settings.showContinue !== false;
                     app.lang = data.settings.lang || 'english';
@@ -281,7 +270,7 @@
                 watchlist: app.xmlLib,
                 recent: app.recent,
                 settings: {
-                    mode: app.mode,
+                    defaultAudio: app.defaultAudio,
                     user: app.user,
                     showContinue: app.showContinue,
                     lang: app.lang,
@@ -321,6 +310,12 @@
             app.view = view;
             app.id = params.id || null;
             app.ep = params.ep || 1;
+            
+            // Als we naar een video gaan, reset de mode naar de standaard audiosetting
+            if (view === 'watch') {
+                app.mode = app.defaultAudio;
+            }
+            
             render();
             window.scrollTo(0,0);
         }
@@ -395,8 +390,8 @@
 
                         <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4 shadow-lg">
                             <div class="flex gap-2">
-                                <button onclick="app.mode='sub';saveCloudData();render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
-                                <button onclick="app.mode='dub';saveCloudData();render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
+                                <button onclick="app.mode='sub';render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Japans (Sub)</button>
+                                <button onclick="app.mode='dub';render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Engels (Dub)</button>
                             </div>
                             <div class="flex items-center gap-4">
                                 <label class="flex items-center gap-2 cursor-pointer">
@@ -489,7 +484,7 @@
                 }
 
                 else if (app.view === 'profile') {
-                    // Profile screen direct weergegeven via app.user! (Geen database wait nodig)
+                    // Profile screen ZONDER delete account module
                     main.innerHTML = `
                         <div class="max-w-md mx-auto space-y-6 animate-fade-in">
                             <div class="card p-8 border border-accent/20 shadow-2xl">
@@ -533,6 +528,15 @@
                                         <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs outline-none font-sans">
                                     </div>
 
+                                    <!-- Standaard Audio (Sub of Dub) -->
+                                    <div class="flex items-center justify-between p-2 border-t border-white/5 pt-4">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Default Audio</span>
+                                        <div class="flex gap-4">
+                                            <label class="flex items-center gap-1.5 text-xs font-bold cursor-pointer"><input type="radio" name="audio" value="sub" ${app.defaultAudio=='sub'?'checked':''}> Sub</label>
+                                            <label class="flex items-center gap-1.5 text-xs font-bold cursor-pointer"><input type="radio" name="audio" value="dub" ${app.defaultAudio=='dub'?'checked':''}> Dub</label>
+                                        </div>
+                                    </div>
+
                                     <!-- Taal anime titels -->
                                     <div class="flex items-center justify-between p-2">
                                         <span class="text-xs font-black uppercase text-zinc-400">Language for Anime Name</span>
@@ -548,7 +552,7 @@
                                         <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
                                     </div>
 
-                                    <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest mt-4 hover:opacity-90">Save Settings</button>
+                                    <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest mt-4 hover:opacity-90 transition-all">Save Settings</button>
                                 </div>
                             </div>
 
@@ -676,7 +680,7 @@
                                             <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black mb-2">${l.name}</p>
                                         </button>
                                         
-                                        <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md" title="Kopieer naar Cloud Bibliotheek">
+                                        <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md">
                                             <i class="fa-solid fa-cloud-arrow-down mr-1"></i> Import
                                         </button>
                                     </div>
@@ -745,7 +749,6 @@
         window.skipIntroTime = function() {
             const player = document.getElementById('player');
             if (player) {
-                // Post message naar Megaplay buzz stream player API om te skippen
                 player.contentWindow.postMessage(JSON.stringify({
                     event: "command",
                     command: "seek",
@@ -764,9 +767,11 @@
             const setSecondsEl = document.getElementById('set-seconds');
             const setUsernameEl = document.getElementById('set-user');
             const langCheckedEl = document.querySelector('input[name="lang"]:checked');
+            const audioCheckedEl = document.querySelector('input[name="audio"]:checked');
 
             if (setUsernameEl) app.user = setUsernameEl.value.trim();
             if (langCheckedEl) app.lang = langCheckedEl.value;
+            if (audioCheckedEl) app.defaultAudio = audioCheckedEl.value;
             if (setContinueEl) app.showContinue = setContinueEl.checked;
             if (setAutoplayEl) app.autoPlay = setAutoplayEl.checked;
             if (setAutonextEl) app.autoNext = setAutonextEl.checked;
@@ -896,7 +901,7 @@
         window.addEventListener("message", e => {
             let data = e.data;
             if (typeof data === "string") { try { data = JSON.parse(data); } catch(err) {} }
-            if(data.event === "complete" && localStorage.getItem('amax_autonext') !== 'false') {
+            if(data.event === "complete" && app.autoNext) {
                 nav('watch', {id: app.id, ep: app.ep + 1});
             }
         });
