@@ -110,6 +110,13 @@
             defaultAudio: 'sub', recent: [], xmlLib: []
         };
 
+        // Trackt de exacte afspeeltijd van de active video lokaal
+        let currentPlaybackTime = 0;
+        let currentDuration = 0;
+
+        // Cache voor MyAnimeList metadata om herhaaldelijk inladen te voorkomen
+        let malCache = {};
+
         // Statische Trending Now Back-uplijst (Laadt ALTIJD direct, 100% rate-limit-proof)
         const STATIC_TRENDING = [
             { id: 147105, title: "Witch Hat Atelier", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx147105-X98uGbyg64gD.png" },
@@ -125,13 +132,6 @@
             { id: 143327, title: "MF Ghost", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx143327-7oK5uY1zW4Zb.png" },
             { id: 161645, title: "The Apothecary Diaries", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx161645-9oR6uG1yK2Za.png" }
         ];
-
-        // Trackt de exacte afspeeltijd van de actieve video lokaal
-        let currentPlaybackTime = 0;
-        let currentDuration = 0;
-
-        // Lokale in-memory cache
-        let mediaCache = {};
 
         // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
@@ -167,6 +167,50 @@
             okBtn.onclick = () => { close(); onConfirm(); };
         };
 
+        // --- URL HASH ROUTING EN STATE MANAGER ---
+        function syncStateToUrl() {
+            let hash = `#${app.view}`;
+            if (app.id) {
+                hash += `?id=${app.id}`;
+                if (app.ep) {
+                    hash += `&ep=${app.ep}`;
+                }
+            }
+            if (window.location.hash !== hash) {
+                history.replaceState(null, null, hash);
+            }
+        }
+
+        function restoreStateFromUrl() {
+            const hash = window.location.hash;
+            if (!hash || hash === '#') {
+                app.view = 'home';
+                app.id = null;
+                app.ep = 1;
+                return;
+            }
+
+            const parts = hash.substring(1).split('?');
+            app.view = parts[0] || 'home';
+            app.id = null;
+            app.ep = 1;
+
+            if (parts[1]) {
+                const params = new URLSearchParams(parts[1]);
+                if (params.has('id')) {
+                    app.id = params.get('id');
+                }
+                if (params.has('ep')) {
+                    app.ep = parseInt(params.get('ep') || '1');
+                }
+            }
+        }
+
+        window.onhashchange = () => {
+            restoreStateFromUrl();
+            render();
+        };
+
         // --- INITIALISATIE MET RLS EN AUTH ---
         window.onload = async () => {
             try {
@@ -184,6 +228,7 @@
                     if(session.user && session.user.email) {
                         app.user = session.user.email.split('@')[0];
                     }
+                    restoreStateFromUrl();
                     await loadCloudData();
                 } else {
                     showLoginPage('login');
@@ -224,7 +269,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl animate-fade-in">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel (RLS)</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -299,7 +344,8 @@
             document.getElementById('app-header').classList.remove('hidden');
             document.getElementById('app-navigation').classList.remove('hidden');
             window.showToast(`Welkom terug, ${app.user}!`);
-            nav('home');
+            
+            render();
         }
 
         async function saveCloudData() {
@@ -331,6 +377,7 @@
         async function logout() {
             await sb.auth.signOut();
             sessionData = null;
+            window.location.hash = ''; 
             showLoginPage('login');
         }
 
@@ -354,7 +401,7 @@
         async function fetchWithRetry(url, retries = 3, delay = 1000) {
             try {
                 const response = await fetch(url);
-                if (response.status === 429) { // Rate limit!
+                if (response.status === 429) { 
                     throw new Error("429");
                 }
                 if (!response.ok) {
@@ -363,9 +410,9 @@
                 return await response.json();
             } catch (error) {
                 if (retries > 0) {
-                    console.log(`Verzoek mislukt of rate-limited. Retry over ${delay}ms... (Retries over: ${retries})`);
+                    console.log(`Verzoek mislukt of rate-limited. Retry over ${delay}ms...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
-                    return fetchWithRetry(url, retries - 1, delay * 2.5); // Verleng de vertraging exponentieel
+                    return fetchWithRetry(url, retries - 1, delay * 2.5); 
                 }
                 throw error;
             }
@@ -408,14 +455,12 @@
             if (!cacheKey) return null;
             if (mediaCache[cacheKey]) return mediaCache[cacheKey];
 
-            // STAP 1: Controleer ALTIJD eerst de gedeelde Supabase Cloud Cache voor instant laadtijd!
             const globalCache = await getMetadataFromGlobalCache(id || malId);
             if (globalCache) {
                 mediaCache[cacheKey] = globalCache;
                 return globalCache;
             }
 
-            // STAP 2: Niet in Supabase? Vraag op via MAL/Jikan API met ons robuuste retry-systeem
             try {
                 let url = '';
                 if (malId) {
@@ -441,16 +486,13 @@
                         coverImage: data.images.jpg.large_image_url || data.images.jpg.image_url
                     };
                     
-                    // Sla direct op in onze in-memory cache
                     mediaCache[cacheKey] = result;
-                    
-                    // Sla direct op in de GEDEELDE Supabase Cache zodat ALLE gebruikers er direct profijt van hebben!
                     saveMetadataToGlobalCache(id || malId || data.mal_id, title || data.title, result.episodes, result.coverImage);
                     
                     return result;
                 }
             } catch (e) {
-                console.warn(`MyAnimeList/Jikan rate-limited en timeout retries uitgeput voor: ${title}`, e);
+                console.warn(`MyAnimeList/Jikan rate-limited voor: ${title}`, e);
             }
             return null;
         }
@@ -485,6 +527,8 @@
                 currentDuration = 0;
             }
             
+            // Sync direct met de URL hash zodat verversen werkt!
+            syncStateToUrl();
             render();
             window.scrollTo(0,0);
         }
@@ -510,12 +554,6 @@
             app.recent = rec.slice(0, 12);
             saveCloudDataDebounced();
         }
-
-        window.onbeforeunload = () => {
-            if (app.view === 'watch' && app.id) {
-                saveCurrentVideoTime();
-            }
-        };
 
         function saveRecent(id, title, img, ep) {
             let rec = app.recent.filter(i => i.id != id);
@@ -638,7 +676,7 @@
                 return;
             }
             
-            window.showToast("AniList watchlist ophalen en samenvoegen...");
+            window.showToast("AniList watchlist ophalen...");
             
             try {
                 const res = await gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user});
@@ -711,9 +749,9 @@
                             ` : ''}
                         </div>
 
-                        <!-- Live afspeeltijd indicator -->
-                        <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] text-zinc-500 font-bold">
-                            <span class="flex items-center gap-1.5"><i class="fa-regular fa-clock accent"></i> HUIDIGE POSITIE: <span id="playback-time-text" class="text-white">0:00</span></span>
+                        <!-- Live afspeeltijd indicator (Wordt nu realtime en perfect bijgewerkt!) -->
+                        <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] text-zinc-500 font-bold font-sans">
+                            <span class="flex items-center gap-1.5"><i class="fa-regular fa-clock accent"></i> HUIDIGE POSITIE: <span id="playback-time-text" class="text-white">0:00 / 0:00</span></span>
                             <span id="playback-progress-percentage" class="accent">0%</span>
                         </div>
 
@@ -733,6 +771,7 @@
 
                         <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">${localTitle}</h1>
                         
+                        <!-- Volledig herontworpen statuspaneel ZONDER AniList afhankelijkheid of 'Laden...' placeholders -->
                         <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between shadow-lg">
                             <div>
                                 <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud database)</p>
@@ -1372,7 +1411,7 @@
                         
                         app.xmlLib = mergeWatchlists(app.xmlLib, data);
                         saveCloudData();
-                        window.showToast(`HiAnime database succesvol geïmporteerd & samengevoegd (${data.length} items)!`);
+                        window.showToast("HiAnime database geïmporteerd!");
                         nav('library');
                         return;
                     }
@@ -1402,7 +1441,7 @@
                         }
                         app.xmlLib = mergeWatchlists(app.xmlLib, data);
                         saveCloudData();
-                        window.showToast(`MyAnimeList XML geïmporteerd & samengevoegd (${data.length} items)!`);
+                        window.showToast("MyAnimeList XML geïmporteerd!");
                         nav('library');
                         return;
                     }
@@ -1424,17 +1463,22 @@
             }
         }, {once:true});
 
-        // --- EVENT LISTENER VOOR MEGAPLAY EVENTS ---
+        // --- EVENT LISTENER VOOR MEGAPLAY EVENTS (Perfect hersteld voor realtime timer!) ---
         window.addEventListener("message", e => {
             let data = e.data;
             if (typeof data === "string") { 
                 try { data = JSON.parse(data); } catch(err) {} 
             }
             
-            if (data.event === "timeupdate" || data.event === "time") {
-                currentPlaybackTime = parseFloat(data.currentTime || data.value || 0);
-                if (data.duration) {
-                    currentDuration = parseFloat(data.duration);
+            // Controleer brede speler-events (zowel directe API properties als specifieke geneste timeupdates)
+            const eventType = data.event || data.type || '';
+            const currentTime = data.currentTime || data.value || (data.data ? data.data.currentTime : 0) || 0;
+            const duration = data.duration || (data.data ? data.data.duration : 0) || 0;
+
+            if (eventType === "timeupdate" || eventType === "time" || eventType === "progress") {
+                currentPlaybackTime = parseFloat(currentTime);
+                if (duration > 0) {
+                    currentDuration = parseFloat(duration);
                 }
                 
                 if (dubTimeout) {
@@ -1442,12 +1486,13 @@
                     dubTimeout = null;
                 }
 
+                // Werk de indicator onmiddellijk en vloeiend in de UI bij
                 const timeText = document.getElementById('playback-time-text');
                 const progressPercent = document.getElementById('playback-progress-percentage');
                 
                 if (timeText && currentDuration > 0) {
                     timeText.innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
-                    const percent = Math.round((currentPlaybackTime / currentDuration) * 100);
+                    const percent = Math.min(100, Math.max(0, Math.round((currentPlaybackTime / currentDuration) * 100)));
                     if (progressPercent) progressPercent.innerText = `${percent}%`;
                 }
             }
@@ -1456,7 +1501,7 @@
                 triggerDubFallback();
             }
 
-            if(data.event === "complete" && app.autoNext) {
+            if(eventType === "complete" && app.autoNext) {
                 saveCurrentVideoTime();
                 const nextEp = app.ep + 1;
                 const localItem = app.xmlLib.find(item => item.id == app.id);
