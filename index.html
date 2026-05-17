@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AnimeMax - Cloud Edition</title>
+    <title>AnimeMax - Supabase Cloud Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Officiële Supabase Browser Client -->
+    <!-- Officiële Supabase Browser SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
     <style>
@@ -33,7 +33,7 @@
 </head>
 <body class="pb-32">
 
-    <!-- Toast Meldingen -->
+    <!-- Toast Meldingen Container (Vervangt irritante browser popups) -->
     <div id="toast-container" class="fixed bottom-28 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none w-[90%] max-w-xs"></div>
 
     <!-- Bevestigingsmodal -->
@@ -43,7 +43,7 @@
             <p id="confirm-message" class="text-zinc-400 text-xs leading-relaxed mb-6"></p>
             <div class="flex gap-3">
                 <button id="confirm-cancel-btn" class="flex-1 bg-zinc-900 border border-white/5 py-3 rounded-xl text-xs font-black uppercase">Annuleren</button>
-                <button id="confirm-ok-btn" class="flex-1 bg-red-500 text-white py-3 rounded-xl text-xs font-black uppercase">Bevestigen</button>
+                <button id="confirm-ok-btn" class="flex-1 bg-accent text-black py-3 rounded-xl text-xs font-black uppercase">Bevestigen</button>
             </div>
         </div>
     </div>
@@ -64,10 +64,13 @@
 
     <!-- Hoofdinhoud -->
     <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
-        <!-- Geladen via JS -->
+        <div class="text-center py-24">
+            <i class="fa-solid fa-circle-notch animate-spin text-4xl accent mb-4"></i>
+            <p class="text-xs uppercase tracking-widest text-zinc-500">Laden en database verbinden...</p>
+        </div>
     </main>
 
-    <!-- Navigatiebalk onderaan (Zichtbaar na inloggen) -->
+    <!-- Bottom Navigatiebalk (Mobiel geoptimaliseerd) -->
     <nav id="app-navigation" class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-sm glass rounded-[2.5rem] p-2 flex justify-around items-center shadow-2xl z-[100] border border-white/10 hidden">
         <button onclick="nav('home')" class="p-4 nav-link" id="nav-home"><i class="fa-solid fa-house"></i></button>
         <button onclick="nav('cloud')" class="p-4 nav-link" id="nav-cloud"><i class="fa-solid fa-cloud"></i></button>
@@ -78,11 +81,11 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Jouw rechtstreeks gekoppelde Supabase Database instellingen (100% automatisch!)
+        // Supabase configuratie met jouw werkende database credentials
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        let sb = null;
         let currentUser = null;
 
         // Globale App Toestand
@@ -94,8 +97,6 @@
             searchQuery: '',
             cloudFilter: 'All',
             libraryFilter: 'All',
-            
-            // Instellingen (gesynchroniseerd met Supabase Cloud)
             user: 'Kozjo09',
             showContinue: true,
             lang: 'english',
@@ -105,9 +106,10 @@
             xmlLib: []
         };
 
-        // --- BROWSER TOAST & CONFIRM ---
+        // --- TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
             const container = document.getElementById('toast-container');
+            if(!container) return;
             const toast = document.createElement('div');
             toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider mb-2 flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto ${
                 type === 'error' ? 'bg-red-950/90 text-red-400 border-red-500/20' : 'bg-zinc-900/90 text-accent border-accent/20'
@@ -141,22 +143,45 @@
             };
         };
 
-        // --- INITIALISATIE & VERBINDING ---
+        // --- AUTOMATISCHE START-CHECK ---
         window.onload = () => {
-            const lastSession = localStorage.getItem('amax_cloud_session');
-            if (lastSession) {
-                const parsed = JSON.parse(lastSession);
-                handleAuth('login', parsed.username, parsed.password);
-            } else {
-                showLoginPage('login');
+            try {
+                // Foutloze initialisatie van de Supabase client
+                if (typeof window.supabase !== 'undefined') {
+                    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+                } else if (typeof supabase !== 'undefined') {
+                    sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+                } else {
+                    throw new Error("Supabase library niet geladen");
+                }
+
+                const lastSession = localStorage.getItem('amax_cloud_session');
+                if (lastSession) {
+                    const parsed = JSON.parse(lastSession);
+                    handleAuth('login', parsed.username, parsed.password);
+                } else {
+                    showLoginPage('login');
+                }
+            } catch(e) {
+                console.error("Database initialisatiefout: ", e);
+                const main = document.getElementById('content');
+                main.innerHTML = `
+                    <div class="max-w-md mx-auto mt-16 p-8 card border border-red-500/20 text-center">
+                        <i class="fa-solid fa-triangle-exclamation text-red-500 text-4xl mb-4"></i>
+                        <h2 class="text-lg font-black uppercase mb-2 text-white">Verbindingsfout</h2>
+                        <p class="text-xs text-zinc-500 leading-relaxed mb-4">Kon geen stabiele verbinding maken met Supabase. Controleer of de scripts correct worden ingeladen.</p>
+                        <button onclick="location.reload()" class="bg-zinc-900 border border-white/10 px-4 py-2 rounded-xl text-xs font-bold uppercase">Opnieuw proberen</button>
+                    </div>
+                `;
             }
         };
 
-        // --- AUTH SYSTEEM ---
+        // --- INLOGGEN EN REGISTREREN ---
         function showLoginPage(mode = 'login') {
             document.getElementById('app-header').classList.add('hidden');
             document.getElementById('app-navigation').classList.add('hidden');
             const main = document.getElementById('content');
+            if(!main) return;
             
             if (mode === 'register') {
                 main.innerHTML = `
@@ -205,7 +230,7 @@
             if (!u || !p) return window.showToast("Vul alle velden in!", "error");
 
             if (type === 'reg') {
-                const { error } = await supabase.from('anime_users').insert([{ username: u, password: btoa(p) }]);
+                const { error } = await sb.from('anime_users').insert([{ username: u, password: btoa(p) }]);
                 if (error) {
                     window.showToast("Gebruikersnaam is al bezet of database is offline.", "error");
                 } else {
@@ -213,7 +238,7 @@
                     showLoginPage('login');
                 }
             } else {
-                const { data, error } = await supabase.from('anime_users').select('*').eq('username', u).eq('password', btoa(p)).single();
+                const { data, error } = await sb.from('anime_users').select('*').eq('username', u).eq('password', btoa(p)).single();
                 if (error || !data) {
                     if (!explicitUser) window.showToast("Inloggegevens zijn onjuist.", "error");
                     showLoginPage('login');
@@ -223,7 +248,7 @@
                 currentUser = data;
                 localStorage.setItem('amax_cloud_session', JSON.stringify({ username: u, password: p }));
                 
-                // Laad cloud synchronisatie data in de app state
+                // Laad cloudgegevens direct in
                 app.xmlLib = data.watchlist || [];
                 app.recent = data.recent || [];
                 if (data.settings) {
@@ -237,14 +262,14 @@
 
                 document.getElementById('app-header').classList.remove('hidden');
                 document.getElementById('app-navigation').classList.remove('hidden');
-                window.showToast(`Verbonden als ${u}!`);
+                window.showToast(`Welkom terug, ${u}!`);
                 nav('home');
             }
         }
 
         async function saveCloudData() {
             if (!currentUser) return;
-            const { error } = await supabase.from('anime_users').update({
+            const { error } = await sb.from('anime_users').update({
                 watchlist: app.xmlLib,
                 recent: app.recent,
                 settings: {
@@ -256,7 +281,7 @@
                     autoNext: app.autoNext
                 }
             }).eq('id', currentUser.id);
-            if (error) console.error("Cloud synchronisatie mislukt:", error);
+            if (error) console.error("Cloud opslaan mislukt:", error);
         }
 
         function logout() {
@@ -313,7 +338,7 @@
             }
 
             saveCloudData();
-            window.showToast("Realtime opgeslagen in de Cloud database!");
+            window.showToast("Realtime gesynchroniseerd met de cloud!");
             render();
         };
 
@@ -332,6 +357,7 @@
         function render() {
             if (!currentUser) return showLoginPage('login');
             const main = document.getElementById('content');
+            if(!main) return;
             
             // Sync navigatie knoppen
             document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('accent'));
@@ -619,7 +645,7 @@
             else if (app.view === 'search') {
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mb-10">
-                        <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none font-bold text-sm focus:border-accent/40 text-white">
+                        <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
                     </div>
                     <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
                 `;
