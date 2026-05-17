@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AnimeMax - Supabase Cloud Edition</title>
+    <title>AnimeMax Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Officiële Supabase Browser SDK -->
+    <!-- Officiële Supabase SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
     <style>
@@ -33,7 +33,7 @@
 </head>
 <body class="pb-32">
 
-    <!-- Toast Meldingen Container (Vervangt irritante browser popups) -->
+    <!-- Toast Meldingen Container -->
     <div id="toast-container" class="fixed bottom-28 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none w-[90%] max-w-xs"></div>
 
     <!-- Bevestigingsmodal -->
@@ -43,7 +43,7 @@
             <p id="confirm-message" class="text-zinc-400 text-xs leading-relaxed mb-6"></p>
             <div class="flex gap-3">
                 <button id="confirm-cancel-btn" class="flex-1 bg-zinc-900 border border-white/5 py-3 rounded-xl text-xs font-black uppercase">Annuleren</button>
-                <button id="confirm-ok-btn" class="flex-1 bg-accent text-black py-3 rounded-xl text-xs font-black uppercase">Bevestigen</button>
+                <button id="confirm-ok-btn" class="flex-1 bg-[#cae962] text-black py-3 rounded-xl text-xs font-black uppercase">Bevestigen</button>
             </div>
         </div>
     </div>
@@ -66,11 +66,11 @@
     <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
         <div class="text-center py-24">
             <i class="fa-solid fa-circle-notch animate-spin text-4xl accent mb-4"></i>
-            <p class="text-xs uppercase tracking-widest text-zinc-500">Laden en database verbinden...</p>
+            <p class="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Laden en database verbinden...</p>
         </div>
     </main>
 
-    <!-- Bottom Navigatiebalk (Mobiel geoptimaliseerd) -->
+    <!-- Bottom Navigatiebalk -->
     <nav id="app-navigation" class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-sm glass rounded-[2.5rem] p-2 flex justify-around items-center shadow-2xl z-[100] border border-white/10 hidden">
         <button onclick="nav('home')" class="p-4 nav-link" id="nav-home"><i class="fa-solid fa-house"></i></button>
         <button onclick="nav('cloud')" class="p-4 nav-link" id="nav-cloud"><i class="fa-solid fa-cloud"></i></button>
@@ -81,7 +81,7 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Supabase configuratie met jouw werkende database credentials
+        // Jouw rechtstreeks gekoppelde Supabase Database instellingen (100% automatisch!)
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
@@ -90,23 +90,11 @@
 
         // Globale App Toestand
         let app = {
-            view: 'home',
-            id: null,
-            ep: 1,
-            mode: 'sub',
-            searchQuery: '',
-            cloudFilter: 'All',
-            libraryFilter: 'All',
-            user: 'Kozjo09',
-            showContinue: true,
-            lang: 'english',
-            autoPlay: true,
-            autoNext: true,
-            recent: [],
-            xmlLib: []
+            view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', cloudFilter: 'All', libraryFilter: 'All',
+            user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, recent: [], xmlLib: []
         };
 
-        // --- TOAST NOTIFICATIES ---
+        // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
             const container = document.getElementById('toast-container');
             if(!container) return;
@@ -137,20 +125,14 @@
             };
 
             cancelBtn.onclick = () => close();
-            okBtn.onclick = () => {
-                close();
-                onConfirm();
-            };
+            okBtn.onclick = () => { close(); onConfirm(); };
         };
 
         // --- AUTOMATISCHE START-CHECK ---
         window.onload = () => {
             try {
-                // Foutloze initialisatie van de Supabase client
                 if (typeof window.supabase !== 'undefined') {
                     sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-                } else if (typeof supabase !== 'undefined') {
-                    sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
                 } else {
                     throw new Error("Supabase library niet geladen");
                 }
@@ -164,15 +146,7 @@
                 }
             } catch(e) {
                 console.error("Database initialisatiefout: ", e);
-                const main = document.getElementById('content');
-                main.innerHTML = `
-                    <div class="max-w-md mx-auto mt-16 p-8 card border border-red-500/20 text-center">
-                        <i class="fa-solid fa-triangle-exclamation text-red-500 text-4xl mb-4"></i>
-                        <h2 class="text-lg font-black uppercase mb-2 text-white">Verbindingsfout</h2>
-                        <p class="text-xs text-zinc-500 leading-relaxed mb-4">Kon geen stabiele verbinding maken met Supabase. Controleer of de scripts correct worden ingeladen.</p>
-                        <button onclick="location.reload()" class="bg-zinc-900 border border-white/10 px-4 py-2 rounded-xl text-xs font-bold uppercase">Opnieuw proberen</button>
-                    </div>
-                `;
+                showLoginPage('login');
             }
         };
 
@@ -248,7 +222,7 @@
                 currentUser = data;
                 localStorage.setItem('amax_cloud_session', JSON.stringify({ username: u, password: p }));
                 
-                // Laad cloudgegevens direct in
+                // Laad alle cloudgegevens direct in
                 app.xmlLib = data.watchlist || [];
                 app.recent = data.recent || [];
                 if (data.settings) {
@@ -262,7 +236,7 @@
 
                 document.getElementById('app-header').classList.remove('hidden');
                 document.getElementById('app-navigation').classList.remove('hidden');
-                window.showToast(`Welkom terug, ${u}!`);
+                window.showToast(`Succesvol verbonden als ${u}!`);
                 nav('home');
             }
         }
@@ -281,7 +255,7 @@
                     autoNext: app.autoNext
                 }
             }).eq('id', currentUser.id);
-            if (error) console.error("Cloud opslaan mislukt:", error);
+            if (error) console.error("Cloud synchronisatie fout:", error);
         }
 
         function logout() {
@@ -322,7 +296,7 @@
             saveCloudData();
         }
 
-        // --- LOKALE BEWERKINGSFUNCTIES ---
+        // --- UPDATE WATCHLIST & EPISODES ---
         window.updateLocalItem = function(id, title, status, progress, totalEpisodes = 12) {
             let found = false;
             app.xmlLib = app.xmlLib.map(item => {
@@ -338,7 +312,7 @@
             }
 
             saveCloudData();
-            window.showToast("Realtime gesynchroniseerd met de cloud!");
+            window.showToast("Realtime opgeslagen in de cloud!");
             render();
         };
 
@@ -524,7 +498,7 @@
 
             else if (app.view === 'library') {
                 main.innerHTML = `
-                    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-2 animate-fade-in">
                         <h2 class="text-xl font-black accent uppercase italic">Local Library</h2>
                         <span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span>
                     </div>
@@ -558,7 +532,7 @@
 
                 filteredXml.forEach(item => {
                     grid.innerHTML += `
-                        <div class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-white/5 shadow-md">
+                        <div class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-white/5 shadow-md animate-fade-in">
                             <div class="truncate pr-4 flex-1">
                                 <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
                                 <div class="flex items-center gap-2">
@@ -582,7 +556,7 @@
                 if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Voeg je AniList gebruikersnaam toe bij Instellingen</p>`;
                 
                 main.innerHTML = `
-                    <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center justify-between mb-4 animate-fade-in">
                         <h2 class="text-xl font-black accent uppercase italic">Cloud List: ${app.user}</h2>
                     </div>
                     
@@ -615,7 +589,7 @@
                             itemsFound = true;
                             const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
                             list.innerHTML += `
-                                <div class="text-left w-full group relative">
+                                <div class="text-left w-full group relative animate-fade-in">
                                     <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="w-full text-left">
                                         <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5">
                                             <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-300">
@@ -627,7 +601,7 @@
                                         <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black mb-2">${l.name}</p>
                                     </button>
                                     
-                                    <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md" title="Kopieer naar Cloud Bibliotheek">
+                                    <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md">
                                         <i class="fa-solid fa-cloud-arrow-down mr-1"></i> Import
                                     </button>
                                 </div>
@@ -791,16 +765,31 @@
         window.saveSet = function() {
             app.user = document.getElementById('set-user').value.trim();
             app.lang = document.querySelector('input[name="lang"]:checked').value;
-            app.autoSelect = document.getElementById('set-select').value;
             app.showContinue = document.getElementById('set-continue').checked;
-            app.autoPlay = document.getElementById('set-autoplay').checked;
-            app.autoNext = document.getElementById('set-autonext').checked;
-            app.autoSkipIntro = document.getElementById('set-autoskip').checked;
-            app.skipSeconds = parseInt(document.getElementById('set-seconds').value || '5');
 
             saveCloudData();
             window.showToast("Instellingen opgeslagen!");
             render();
+        };
+
+        window.liveSearch = function(e) {
+            const val = e.target.value;
+            if(!val) return;
+            gql(`query($s:String){Page(perPage:18){media(search:$s,type:ANIME){id title{romaji english}coverImage{large}}}}`, {s: val}).then(res => {
+                const grid = document.getElementById('search-grid');
+                if(!grid || !res || !res.data) return; grid.innerHTML = '';
+                res.data.Page.media.forEach(m => {
+                    const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                    grid.innerHTML += `
+                        <button onclick="nav('watch', {id:${m.id}})" class="text-left animate-fade-in">
+                            <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
+                                <img src="${m.coverImage.large}" class="w-full h-full object-cover">
+                            </div>
+                            <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400">${t}</p>
+                        </button>
+                    `;
+                });
+            });
         };
 
         window.handleXML = function() {
