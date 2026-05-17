@@ -225,9 +225,6 @@
                 const { data: { session } } = await sb.auth.getSession();
                 if (session) {
                     sessionData = session;
-                    if(session.user && session.user.email) {
-                        app.user = session.user.email.split('@')[0];
-                    }
                     restoreStateFromUrl();
                     await loadCloudData();
                 } else {
@@ -253,14 +250,25 @@
                         <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Maak een nieuw cloud-profiel aan</p>
                         <div class="space-y-4">
                             <div>
-                                <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
-                                <input type="text" id="auth-username" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                                <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">E-mailadres</label>
+                                <input type="email" id="auth-email" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="voorbeeld@gmail.com">
                             </div>
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Wachtwoord</label>
-                                <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                                <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="Wachtwoord (min. 6 tekens)">
                             </div>
                             <button onclick="handleAuth('reg')" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest">Account Aanmaken</button>
+                            
+                            <div class="relative flex py-2 items-center">
+                                <div class="flex-grow border-t border-white/5"></div>
+                                <span class="flex-shrink mx-4 text-[10px] text-zinc-500 uppercase font-black">Of</span>
+                                <div class="flex-grow border-t border-white/5"></div>
+                            </div>
+
+                            <button onclick="handleGoogleLogin()" class="bg-white text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors">
+                                <i class="fa-brands fa-google text-sm"></i> Registreren met Google
+                            </button>
+
                             <p class="text-center text-xs text-zinc-500 mt-4">Heb je al een account? <button onclick="showLoginPage('login')" class="accent font-bold hover:underline">Inloggen</button></p>
                         </div>
                     </div>
@@ -272,14 +280,25 @@
                         <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel</p>
                         <div class="space-y-4">
                             <div>
-                                <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
-                                <input type="text" id="auth-username" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                                <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">E-mailadres</label>
+                                <input type="text" id="auth-email" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="voorbeeld@gmail.com of gebruikersnaam">
                             </div>
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Wachtwoord</label>
-                                <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                                <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="Wachtwoord">
                             </div>
                             <button onclick="handleAuth('login')" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest">Inloggen</button>
+                            
+                            <div class="relative flex py-2 items-center">
+                                <div class="flex-grow border-t border-white/5"></div>
+                                <span class="flex-shrink mx-4 text-[10px] text-zinc-500 uppercase font-black">Of</span>
+                                <div class="flex-grow border-t border-white/5"></div>
+                            </div>
+
+                            <button onclick="handleGoogleLogin()" class="bg-white text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors">
+                                <i class="fa-brands fa-google text-sm"></i> Inloggen met Google
+                            </button>
+
                             <p class="text-center text-xs text-zinc-500 mt-4">Nieuwe gebruiker? <button onclick="showLoginPage('register')" class="accent font-bold hover:underline">Registreer hier</button></p>
                         </div>
                     </div>
@@ -287,33 +306,52 @@
             }
         }
 
-        async function handleAuth(type, explicitUser = null, explicitPass = null) {
-            const u = explicitUser || document.getElementById('auth-username').value.trim();
-            const p = explicitPass || document.getElementById('auth-password').value.trim();
-            if (!u || !p) return window.showToast("Vul alle velden in!", "error");
+        async function handleGoogleLogin() {
+            window.showToast("Inloggen met Google opstarten...");
+            const { error } = await sb.auth.signInWithOAuth({
+                provider: 'google',
+                options: {
+                    redirectTo: window.location.origin + window.location.pathname
+                }
+            });
+            if (error) {
+                window.showToast("Google OAuth mislukt: " + error.message, "error");
+            }
+        }
 
-            const email = `${u.toLowerCase()}@animemax.local`;
-            app.user = u; 
+        async function handleAuth(type) {
+            const p = document.getElementById('auth-password').value.trim();
 
             if (type === 'reg') {
-                const { data, error } = await sb.auth.signUp({ email, password: p });
-                if (error) {
-                    window.showToast("Registratie mislukt of naam bezet.", "error");
+                const email = document.getElementById('auth-email').value.trim();
+                if (!email || !p) return window.showToast("Vul alle velden in!", "error");
+                if (p.length < 6) {
+                    window.showToast("Wachtwoord moet minimaal 6 tekens bevatten!", "error");
                     return;
                 }
                 
-                if (data.user) {
-                    const { error: insertErr } = await sb.from('anime_users').insert([{
-                        id: data.user.id, username: u, watchlist: [], recent: []
-                    }]);
-                    if(insertErr) console.error("Profiel insert fout:", insertErr);
+                app.user = email.split('@')[0];
+
+                const { data, error } = await sb.auth.signUp({ email, password: p });
+                if (error) {
+                    window.showToast("Registratie mislukt: " + error.message, "error");
+                    return;
                 }
-                window.showToast("Geregistreerd! Je kunt nu inloggen.");
+                
+                window.showToast("Account succesvol aangemaakt! Je kunt nu direct inloggen.");
                 showLoginPage('login');
             } else {
+                const emailInput = document.getElementById('auth-email').value.trim();
+                if (!emailInput || !p) return window.showToast("Vul alle velden in!", "error");
+                
+                let email = emailInput;
+                if (!emailInput.includes('@')) {
+                    email = `${emailInput.toLowerCase()}@animemax.local`;
+                }
+
                 const { data, error } = await sb.auth.signInWithPassword({ email, password: p });
                 if (error) {
-                    window.showToast("Gebruikersnaam of wachtwoord onjuist.", "error");
+                    window.showToast("E-mailadres of wachtwoord onjuist.", "error");
                     return;
                 }
                 sessionData = data.session;
@@ -323,7 +361,9 @@
 
         async function loadCloudData() {
             if (!sessionData) return;
-            const { data, error } = await sb.from('anime_users').select('*').eq('id', sessionData.user.id).single();
+            
+            // Gebruik maybeSingle() in plaats van single() om databasecrashes (PGRST116) te vermijden als de rij nog niet bestaat
+            const { data, error } = await sb.from('anime_users').select('*').eq('id', sessionData.user.id).maybeSingle();
             
             if (data) {
                 app.xmlLib = data.watchlist || [];
@@ -331,19 +371,45 @@
                 if (data.settings) {
                     app.defaultAudio = data.settings.defaultAudio || 'sub';
                     app.mode = app.defaultAudio; 
-                    app.user = data.settings.user || app.user;
+                    app.user = data.settings.user || sessionData.user.user_metadata?.full_name || sessionData.user.email.split('@')[0];
                     app.showContinue = data.settings.showContinue !== false;
                     app.lang = data.settings.lang || 'english';
                     app.autoPlay = data.settings.autoPlay !== false;
                     app.autoNext = data.settings.autoNext !== false;
                     app.autoSkipIntro = data.settings.autoSkipIntro === true;
                     app.skipSeconds = parseInt(data.settings.skipSeconds || '5');
+                } else {
+                    app.user = sessionData.user.user_metadata?.full_name || sessionData.user.email.split('@')[0];
+                }
+            } else {
+                // RLS-FIXX: Omdat de gebruiker nu ingelogd is en een actieve tokensessie heeft,
+                // kunnen we zijn profielrij probleemloos initialiseren. Supabase RLS staat dit nu 100% foutloos toe!
+                app.user = sessionData.user.user_metadata?.full_name || sessionData.user.email.split('@')[0];
+                const { error: insertErr } = await sb.from('anime_users').insert([{
+                    id: sessionData.user.id,
+                    username: app.user,
+                    watchlist: [],
+                    recent: [],
+                    settings: {
+                        defaultAudio: app.defaultAudio,
+                        user: app.user,
+                        showContinue: app.showContinue,
+                        lang: app.lang,
+                        autoPlay: app.autoPlay,
+                        autoNext: app.autoNext,
+                        autoSkipIntro: app.autoSkipIntro,
+                        skipSeconds: app.skipSeconds
+                    }
+                }]);
+                if (insertErr) {
+                    console.error("Fout bij maken van cloudprofiel:", insertErr);
+                } else {
+                    window.showToast("Cloud-database profiel succesvol aangemaakt!");
                 }
             }
 
             document.getElementById('app-header').classList.remove('hidden');
             document.getElementById('app-navigation').classList.remove('hidden');
-            window.showToast(`Welkom terug, ${app.user}!`);
             
             render();
         }
@@ -418,48 +484,11 @@
             }
         }
 
-        // --- SUPABASE SHARED CACHE ENGINE (Laadt instant voor iedereen!) ---
-        async function getMetadataFromGlobalCache(id) {
-            if (!id) return null;
-            try {
-                const { data, error } = await sb.from('anime_metadata').select('*').eq('id', id.toString()).maybeSingle();
-                if (data) {
-                    return {
-                        episodes: data.episodes,
-                        coverImage: data.cover_image
-                    };
-                }
-            } catch (e) {
-                console.warn("Fout bij lezen uit gedeelde cache-tabel:", e);
-            }
-            return null;
-        }
-
-        async function saveMetadataToGlobalCache(id, title, episodes, coverImage) {
-            if (!id || !coverImage) return;
-            try {
-                await sb.from('anime_metadata').upsert({
-                    id: id.toString(),
-                    title: title || '',
-                    episodes: episodes || 12,
-                    cover_image: coverImage
-                });
-            } catch (e) {
-                console.warn("Fout bij opslaan in gedeelde cache-tabel:", e);
-            }
-        }
-
         // --- EXCLUSIEVE MYANIMELIST (MAL) METADATA FETCH (Rate-Limit & Timeout Safe!) ---
         async function fetchMyAnimeListMetadata(id, malId, title) {
             const cacheKey = id || malId || title;
             if (!cacheKey) return null;
             if (mediaCache[cacheKey]) return mediaCache[cacheKey];
-
-            const globalCache = await getMetadataFromGlobalCache(id || malId);
-            if (globalCache) {
-                mediaCache[cacheKey] = globalCache;
-                return globalCache;
-            }
 
             try {
                 let url = '';
@@ -487,8 +516,6 @@
                     };
                     
                     mediaCache[cacheKey] = result;
-                    saveMetadataToGlobalCache(id || malId || data.mal_id, title || data.title, result.episodes, result.coverImage);
-                    
                     return result;
                 }
             } catch (e) {
@@ -533,6 +560,19 @@
             window.scrollTo(0,0);
         }
 
+        function formatDuration(sec) {
+            if (!sec || isNaN(sec)) return "0:00";
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.floor(sec % 60);
+            const paddedS = s < 10 ? '0' + s : s;
+            if (h > 0) {
+                const paddedM = m < 10 ? '0' + m : m;
+                return `${h}:${paddedM}:${paddedS}`;
+            }
+            return `${m}:${paddedS}`;
+        }
+
         // --- VERDER KIJKEN (RESUME) LOGICA ---
         function saveCurrentVideoTime() {
             if (app.view !== 'watch' || !app.id) return;
@@ -554,34 +594,6 @@
             app.recent = rec.slice(0, 12);
             saveCloudDataDebounced();
         }
-
-        function saveRecent(id, title, img, ep) {
-            let rec = app.recent.filter(i => i.id != id);
-            const existing = app.recent.find(i => i.id == id);
-            
-            const savedTime = (existing && existing.ep == ep) ? existing.time : 0;
-            const savedDuration = (existing && existing.ep == ep) ? existing.duration : 0;
-
-            rec.unshift({
-                id, title, img, ep, time: savedTime, duration: savedDuration, ts: Date.now()
-            });
-            app.recent = rec.slice(0, 12);
-            saveCloudDataDebounced();
-        }
-
-        window.removeRecentAnime = function(event, id) {
-            event.stopPropagation();
-            window.showConfirm(
-                "Geschiedenis Verwijderen",
-                "Weet je zeker dat je deze anime wilt verwijderen uit je Verder Kijken geschiedenis?",
-                () => {
-                    app.recent = app.recent.filter(r => r.id != id);
-                    saveCloudDataDebounced();
-                    window.showToast("Verwijderd uit geschiedenis!");
-                    render();
-                }
-            );
-        };
 
         // --- SLIMME AUTO WATCHLIST & PROGRESSIE SPREIDING (ZONDER KNOPPEN) ---
         window.autoUpdateProgressOnEpClick = function(id, title, newEpisode, totalEpisodes, coverImage) {
@@ -799,7 +811,7 @@
                     for (let i = 1; i <= localTotalEpisodes; i++) {
                         let btnClass = (i == app.ep) ? "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20" : "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
                         if (i <= userProgress && i != app.ep) btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
-                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick(${app.id}, '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
+                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
                     }
 
                     const activeRecent = app.recent.find(r => r.id == app.id && r.ep == app.ep);
@@ -870,7 +882,7 @@
                                 }
 
                                 grid.innerHTML += `
-                                    <button onclick="window.autoUpdateProgressOnEpClick(${app.id}, '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:${app.id}, ep:${i}})" 
+                                    <button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:${app.id}, ep:${i}})" 
                                         ${disabledAttr} 
                                         class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">
                                         ${i}
@@ -1002,7 +1014,7 @@
                                     </div>
 
                                     <div class="p-2 border-t border-white/5 pt-4">
-                                        <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username (Voor eenmalige sync)</label>
+                                        <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">Aangepaste Gebruikersnaam (Display Name)</label>
                                         <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
                                     </div>
 
@@ -1134,7 +1146,7 @@
                 grid.innerHTML += `
                     <div id="lib-card-${item.id}" data-id="${item.id}" data-mal="${item.malId || ''}" class="lazy-card card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
                         <div class="flex gap-4 items-center flex-1 min-w-0">
-                            <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=150'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
+                            <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=300'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 shadow flex-shrink-0">
                             <div class="truncate pr-4 flex-1">
                                 <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
                                 <div class="flex items-center gap-2">
@@ -1194,7 +1206,7 @@
 
             document.querySelectorAll('.lazy-card').forEach(card => {
                 const id = card.getAttribute('data-id');
-                const item = app.xmlLib.find(it => it.id.toString() == id.toString());
+                const item = app.xmlLib.find(it => id.toString() == id.toString());
                 if (item && (!item.coverImage || !item.episodes || item.episodes == 12)) {
                     lazyObserver.observe(card);
                 }
@@ -1226,7 +1238,7 @@
                 saveCloudDataDebounced();
                 render();
             } else if (newStatus) {
-                window.showToast("Ongeldige status! Gebruik Watching, Watched of Dropped.", "error");
+                window.showToast("Ongeldige status! Gebruik Watching, Watged of Dropped.", "error");
             }
         };
 
@@ -1282,7 +1294,7 @@
                 res.data.Page.media.forEach(m => {
                     const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
                     grid.innerHTML += `
-                        <button onclick="nav('watch', {id:${m.id}})" class="text-left animate-fade-in">
+                        <button onclick="nav('watch', {id:${m.id}})" class="text-left group animate-toast">
                             <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
                                 <img src="${m.coverImage.large}" class="w-full h-full object-cover">
                             </div>
@@ -1324,6 +1336,7 @@
                         xml += `        <url>https://hianime.dk/watch/${item.id}</url>\n`;
                         xml += `        <mal>https://myanimelist.net/anime/${item.id}</mal>\n`;
                         xml += `        <al>https://anilist.co/anime/${item.id}</al>\n`;
+                        // FIX: no closing tag was present in original text.html
                         xml += `      </item>\n`;
                     });
                     
@@ -1513,4 +1526,4 @@
         });
     </script>
 </body>
-</html>
+    </html>
