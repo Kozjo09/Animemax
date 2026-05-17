@@ -92,7 +92,7 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Jouw werkende Supabase Database instellingen!
+        // Gekoppelde Supabase Database instellingen!
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
@@ -130,8 +130,8 @@
         let currentPlaybackTime = 0;
         let currentDuration = 0;
 
-        // Cache voor MyAnimeList metadata om herhaaldelijk inladen te voorkomen
-        let malCache = {};
+        // Lokale in-memory cache
+        let mediaCache = {};
 
         // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
@@ -224,7 +224,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl animate-fade-in">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel (RLS)</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -350,43 +350,107 @@
             }
         }
 
-        // --- EXCLUSIEVE MYANIMELIST (MAL) METADATA FETCH (Rate-Limit Safe!) ---
-        async function fetchMyAnimeListMetadata(malId, title) {
-            if (!malId && !title) return null;
-            const cacheKey = malId || title;
-            if (malCache[cacheKey]) return malCache[cacheKey];
+        // --- INTELLIGENTE RETRY EN TIMEOUT FETCH ENGINE (MAL/Jikan API) ---
+        async function fetchWithRetry(url, retries = 3, delay = 1000) {
+            try {
+                const response = await fetch(url);
+                if (response.status === 429) { // Rate limit!
+                    throw new Error("429");
+                }
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                if (retries > 0) {
+                    console.log(`Verzoek mislukt of rate-limited. Retry over ${delay}ms... (Retries over: ${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithRetry(url, retries - 1, delay * 2.5); // Verleng de vertraging exponentieel
+                }
+                throw error;
+            }
+        }
 
+        // --- SUPABASE SHARED CACHE ENGINE (Laadt instant voor iedereen!) ---
+        async function getMetadataFromGlobalCache(id) {
+            if (!id) return null;
+            try {
+                const { data, error } = await sb.from('anime_metadata').select('*').eq('id', id.toString()).maybeSingle();
+                if (data) {
+                    return {
+                        episodes: data.episodes,
+                        coverImage: data.cover_image
+                    };
+                }
+            } catch (e) {
+                console.warn("Fout bij lezen uit gedeelde cache-tabel:", e);
+            }
+            return null;
+        }
+
+        async function saveMetadataToGlobalCache(id, title, episodes, coverImage) {
+            if (!id || !coverImage) return;
+            try {
+                await sb.from('anime_metadata').upsert({
+                    id: id.toString(),
+                    title: title || '',
+                    episodes: episodes || 12,
+                    cover_image: coverImage
+                });
+            } catch (e) {
+                console.warn("Fout bij opslaan in gedeelde cache-tabel:", e);
+            }
+        }
+
+        // --- EXCLUSIEVE MYANIMELIST (MAL) METADATA FETCH (Rate-Limit & Timeout Safe!) ---
+        async function fetchMyAnimeListMetadata(id, malId, title) {
+            const cacheKey = id || malId || title;
+            if (!cacheKey) return null;
+            if (mediaCache[cacheKey]) return mediaCache[cacheKey];
+
+            // STAP 1: Controleer ALTIJD eerst de gedeelde Supabase Cloud Cache voor instant laadtijd!
+            const globalCache = await getMetadataFromGlobalCache(id || malId);
+            if (globalCache) {
+                mediaCache[cacheKey] = globalCache;
+                return globalCache;
+            }
+
+            // STAP 2: Niet in Supabase? Vraag op via MAL/Jikan API met ons robuuste retry-systeem
             try {
                 let url = '';
                 if (malId) {
-                    // Directe query op MAL ID via Jikan API v4
                     url = `https://api.jikan.moe/v4/anime/${malId}`;
                 } else if (title) {
-                    // Fallback titel-zoekopdracht via Jikan API v4
                     url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(title)}&limit=1`;
+                } else {
+                    return null;
                 }
 
-                const response = await fetch(url);
-                if (response.ok) {
-                    const json = await response.json();
-                    let data = null;
-                    
-                    if (malId && json && json.data) {
-                        data = json.data;
-                    } else if (json && json.data && json.data.length > 0) {
-                        data = json.data[0];
-                    }
+                const json = await fetchWithRetry(url, 3, 1000);
+                let data = null;
+                
+                if (malId && json && json.data) {
+                    data = json.data;
+                } else if (json && json.data && json.data.length > 0) {
+                    data = json.data[0];
+                }
 
-                    if (data) {
-                        malCache[cacheKey] = {
-                            episodes: data.episodes || 12,
-                            coverImage: data.images.jpg.large_image_url || data.images.jpg.image_url
-                        };
-                        return malCache[cacheKey];
-                    }
+                if (data) {
+                    const result = {
+                        episodes: data.episodes || 12,
+                        coverImage: data.images.jpg.large_image_url || data.images.jpg.image_url
+                    };
+                    
+                    // Sla direct op in onze in-memory cache
+                    mediaCache[cacheKey] = result;
+                    
+                    // Sla direct op in de GEDEELDE Supabase Cache zodat ALLE gebruikers er direct profijt van hebben!
+                    saveMetadataToGlobalCache(id || malId || data.mal_id, title || data.title, result.episodes, result.coverImage);
+                    
+                    return result;
                 }
             } catch (e) {
-                console.warn("MyAnimeList/Jikan rate-limited of offline.", e);
+                console.warn(`MyAnimeList/Jikan rate-limited en timeout retries uitgeput voor: ${title}`, e);
             }
             return null;
         }
@@ -423,19 +487,6 @@
             
             render();
             window.scrollTo(0,0);
-        }
-
-        function formatDuration(sec) {
-            if (!sec || isNaN(sec)) return "0:00";
-            const h = Math.floor(sec / 3600);
-            const m = Math.floor((sec % 3600) / 60);
-            const s = Math.floor(sec % 60);
-            const paddedS = s < 10 ? '0' + s : s;
-            if (h > 0) {
-                const paddedM = m < 10 ? '0' + m : m;
-                return `${h}:${paddedM}:${paddedS}`;
-            }
-            return `${m}:${paddedS}`;
         }
 
         // --- VERDER KIJKEN (RESUME) LOGICA ---
@@ -1020,7 +1071,7 @@
             }
         }
 
-        // --- BIBLIOTHEEK LAADPAGINA MET MULTI-SOURCE FALLBACK (MyAnimeList Exclusief!) ---
+        // --- BIBLIOTHEEK LAADPAGINA MET LOKALE CACHE EN TRAGE BATCHING (GEEN RATE LIMIT CRASHES!) ---
         async function renderLibraryGrid() {
             const grid = document.getElementById('xml-display-grid');
             if (!grid) return;
@@ -1039,6 +1090,7 @@
             grid.className = "space-y-4 mt-2";
             grid.innerHTML = '';
 
+            // Render alle kaarten direct (gebruikt direct reeds gesyncte posters)
             filteredXml.forEach(item => {
                 grid.innerHTML += `
                     <div id="lib-card-${item.id}" data-id="${item.id}" data-mal="${item.malId || ''}" class="lazy-card card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
@@ -1077,8 +1129,8 @@
 
                         const item = app.xmlLib.find(it => it.id.toString() == id.toString());
                         if (item && (!item.coverImage || !item.episodes || item.episodes == 12)) {
-                            // Belangrijk: Gebruik uitsluitend MyAnimeList (MAL) via Jikan voor de bibliotheek-posters!
-                            const meta = await fetchMyAnimeListMetadata(malId, item.title);
+                            // Exclusieve MAL/Jikan fetcher met Supabase Cloud-database Caching
+                            const meta = await fetchMyAnimeListMetadata(id, malId, item.title);
                             if (meta) {
                                 item.coverImage = meta.coverImage;
                                 item.episodes = meta.episodes;
@@ -1114,6 +1166,29 @@
         window.filterXml = function(status) {
             app.libraryFilter = status;
             render();
+        };
+
+        // --- BIBLIOTHEEK ACTIEHULPJES ---
+        window.quickIncrement = function(id) {
+            const item = app.xmlLib.find(item => item.id.toString() == id.toString());
+            if (!item) return;
+            const nextProgress = parseInt(item.progress || 0) + 1;
+            window.autoUpdateProgressOnEpClick(id, item.title, nextProgress, item.episodes || 12, item.coverImage || '');
+            render();
+        };
+
+        window.changeLocalFolderPrompt = function(id) {
+            const item = app.xmlLib.find(i => i.id.toString() == id.toString());
+            if (!item) return;
+            const newStatus = prompt("Typ een nieuwe status (Watching, Watched, Dropped):", item.status);
+            if (newStatus && ["Watching", "Watched", "Dropped"].includes(newStatus)) {
+                window.autoUpdateProgressOnEpClick(id, item.title, item.progress, item.episodes || 12, item.coverImage || '');
+                item.status = newStatus;
+                saveCloudDataDebounced();
+                render();
+            } else if (newStatus) {
+                window.showToast("Ongeldige status! Gebruik Watching, Watched of Dropped.", "error");
+            }
         };
 
         // --- SKIP INTRO ---
