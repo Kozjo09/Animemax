@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>AnimeMax Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Officiële Supabase SDK -->
+    <!-- Officiële Supabase Browser Client SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
     <style>
@@ -23,18 +23,31 @@
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
-        /* Toast Animatie vanaf de bovenkant */
-        @keyframes slideInFromTop {
-            from { transform: translate(-50%, -100%); opacity: 0; }
-            to { transform: translate(-50%, 0); opacity: 1; }
+        /* Toast Container met vaste mobiele marges (Voorkomt scheve uitlijning) */
+        #toast-container {
+            position: fixed;
+            top: 24px;
+            left: 0;
+            right: 0;
+            margin: 0 auto;
+            width: calc(100% - 32px);
+            max-width: 360px;
+            z-index: 10000;
+            pointer-events: none;
         }
-        .animate-toast { animation: slideInFromTop 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+        /* Vloeiende Slide-Down Animatie vanaf de bovenkant */
+        @keyframes slideDown {
+            from { transform: translateY(-100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-toast { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
     </style>
 </head>
 <body class="pb-32">
 
-    <!-- Toast Meldingen Container (Nu perfect bovenaan uitgelijnd, gecentreerd en mobiel-vriendelijk) -->
-    <div id="toast-container" class="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none w-[90%] max-w-sm"></div>
+    <!-- Toast Meldingen Container (Gecentreerd bovenaan) -->
+    <div id="toast-container" class="flex flex-col gap-2"></div>
 
     <!-- Bevestigingsmodal -->
     <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10000] hidden items-center justify-center p-4">
@@ -66,7 +79,7 @@
     <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
         <div class="text-center py-24">
             <i class="fa-solid fa-circle-notch animate-spin text-4xl accent mb-4"></i>
-            <p class="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Veilige database verbinden...</p>
+            <p class="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Laden en cloud-database verbinden...</p>
         </div>
     </main>
 
@@ -81,7 +94,7 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Gekoppelde Supabase-database instellingen
+        // Gekoppelde Supabase Database instellingen
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
@@ -91,16 +104,16 @@
         // Globale App Toestand
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', cloudFilter: 'All', libraryFilter: 'All',
-            user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, recent: [], xmlLib: []
+            user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 5, recent: [], xmlLib: []
         };
 
-        // --- CUSTOM TOAST NOTIFICATIES ---
+        // --- CUSTOM TOAST NOTIFICATIES (Perfect Gecentreerd Bovenaan) ---
         window.showToast = function(message, type = 'success') {
             const container = document.getElementById('toast-container');
             if(!container) return;
             const toast = document.createElement('div');
-            toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider mb-2 flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto ${
-                type === 'error' ? 'bg-red-950/90 text-red-400 border-red-500/20' : 'bg-zinc-900/95 text-accent border-accent/20'
+            toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider mb-2 flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto w-full ${
+                type === 'error' ? 'bg-red-950/95 text-red-400 border-red-500/20' : 'bg-zinc-900/95 text-accent border-accent/20'
             }`;
             toast.innerHTML = `<span>${message}</span><button onclick="this.parentElement.remove()" class="ml-4 opacity-50 hover:opacity-100"><i class="fa-solid fa-times"></i></button>`;
             container.appendChild(toast);
@@ -146,7 +159,7 @@
                     showLoginPage('login');
                 }
             } catch(e) {
-                console.error("Database initialisatiefout: ", e);
+                console.error("Database verbinding mislukt: ", e);
                 showLoginPage('login');
             }
         };
@@ -162,7 +175,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Maak een nieuw RLS-beveiligd cloud-profiel aan</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Maak een nieuw cloud-profiel aan</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -204,7 +217,6 @@
             const p = explicitPass || document.getElementById('auth-password').value.trim();
             if (!u || !p) return window.showToast("Vul alle velden in!", "error");
 
-            // Virtuele veilige e-mailstructuur voor de Auth Module
             const email = `${u.toLowerCase()}@animemax.local`;
 
             if (type === 'reg') {
@@ -215,16 +227,13 @@
                 }
                 
                 if (data.user) {
-                    // Maak de rij aan in public.anime_users gekoppeld aan de auth uuid
                     const { error: insertErr } = await sb.from('anime_users').insert([{
                         id: data.user.id,
                         username: u,
                         watchlist: [],
                         recent: []
                     }]);
-                    if(insertErr) {
-                        console.error("Profiel insert fout:", insertErr);
-                    }
+                    if(insertErr) console.error("Profiel insert fout:", insertErr);
                 }
                 window.showToast("Geregistreerd! Je kunt nu inloggen.");
                 showLoginPage('login');
@@ -247,7 +256,7 @@
                 return;
             }
 
-            // Hydrateer app state
+            // Hydrateer app state met veilige fallbacks
             app.xmlLib = data.watchlist || [];
             app.recent = data.recent || [];
             if (data.settings) {
@@ -257,6 +266,8 @@
                 app.lang = data.settings.lang || 'english';
                 app.autoPlay = data.settings.autoPlay !== false;
                 app.autoNext = data.settings.autoNext !== false;
+                app.autoSkipIntro = data.settings.autoSkipIntro === true;
+                app.skipSeconds = parseInt(data.settings.skipSeconds || '5');
             }
 
             document.getElementById('app-header').classList.remove('hidden');
@@ -276,10 +287,12 @@
                     showContinue: app.showContinue,
                     lang: app.lang,
                     autoPlay: app.autoPlay,
-                    autoNext: app.autoNext
+                    autoNext: app.autoNext,
+                    autoSkipIntro: app.autoSkipIntro,
+                    skipSeconds: app.skipSeconds
                 }
             }).eq('id', sessionData.user.id);
-            if (error) console.error("Cloud synchronisatie fout:", error);
+            if (error) console.error("Cloud opslaan mislukt:", error);
         }
 
         async function logout() {
@@ -287,29 +300,6 @@
             sessionData = null;
             showLoginPage('login');
         }
-
-        // --- VERWIJDER ACCOUNT PERMANENT MET CONFIRM TYPING ---
-        window.deleteAccountPermanently = async function() {
-            const userInput = prompt("Vul 'delete' in om je account en alle watchlists definitief uit de database te verwijderen:");
-            if (userInput === null) return; // Geannuleerd
-            
-            if (userInput.trim().toLowerCase() === 'delete') {
-                try {
-                    // 1. Wis de profieldata in public.anime_users (RLS staat dit toe omdat we ingelogd zijn)
-                    const { error: profileError } = await sb.from('anime_users').delete().eq('id', sessionData.user.id);
-                    if(profileError) throw profileError;
-                    
-                    // 2. Roep Supabase signOut aan en stuur de gebruiker terug
-                    window.showToast("Account en alle watchlists permanent verwijderd.");
-                    await logout();
-                } catch(e) {
-                    console.error(e);
-                    window.showToast("Permanent verwijderen mislukt. Probeer het later opnieuw.", "error");
-                }
-            } else {
-                window.showToast("Invoer onjuist. Verwijderen afgebroken.", "error");
-            }
-        };
 
         // --- GRAPHQL API CALL HELPER ---
         async function gql(query, vars) {
@@ -359,7 +349,7 @@
             }
 
             saveCloudData();
-            window.showToast("Realtime gesynchroniseerd!");
+            window.showToast("Gesynchroniseerd met de cloud!");
             render();
         };
 
@@ -390,438 +380,403 @@
             }
             document.getElementById('prof-btn').classList.add('accent');
 
-            if (app.view === 'watch') {
-                main.innerHTML = `
-                    <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl animate-fade-in">
-                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
-                    </div>
-
-                    <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4 shadow-lg">
-                        <div class="flex gap-2">
-                            <button onclick="app.mode='sub';saveCloudData();render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
-                            <button onclick="app.mode='dub';saveCloudData();render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
-                        </div>
-                        <div class="flex items-center gap-4">
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" id="toggle-autonext" class="toggle-checkbox hidden">
-                                <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
-                                <span class="text-[9px] font-black uppercase text-zinc-400">Auto Next</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">Laden...</h1>
-                    
-                    <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between shadow-lg">
-                        <div>
-                            <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud database)</p>
-                            <h3 id="local-status-text" class="text-xs font-bold text-white mt-1">Laden...</h3>
-                        </div>
-                        <div class="flex gap-2 flex-wrap">
-                            <select id="local-status-select" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 font-bold outline-none">
-                                <option value="Watching">Watching</option>
-                                <option value="Watched">Completed</option>
-                                <option value="Dropped">Dropped</option>
-                            </select>
-                            <input type="number" id="local-progress-input" value="0" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 w-16 text-center font-bold outline-none">
-                            <button id="local-save-btn" class="bg-accent text-black px-4 py-2 rounded-lg text-xs font-black uppercase">Opslaan</button>
-                        </div>
-                    </div>
-
-                    <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8"></div>
-                    <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4 tracking-widest">Related Seasons</h2>
-                    <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
-                `;
-
-                const autoNext = document.getElementById('toggle-autonext');
-                autoNext.checked = app.autoNext;
-                autoNext.addEventListener('change', e => { 
-                    app.autoNext = e.target.checked; 
-                    saveCloudData(); 
-                });
-
-                gql(`query($id:Int){Media(id:$id){title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
-                    if (!res || !res.data) {
-                        document.getElementById('w-title').innerText = "Informatie niet gevonden";
-                        return;
-                    }
-                    const m = res.data.Media;
-                    const title = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
-                    document.getElementById('w-title').innerText = title;
-                    
-                    saveRecent(app.id, title, m.coverImage.large, app.ep);
-
-                    const localItem = app.xmlLib.find(item => item.id == app.id);
-                    const statusText = document.getElementById('local-status-text');
-                    const selectEl = document.getElementById('local-status-select');
-                    const progressInput = document.getElementById('local-progress-input');
-                    const saveBtn = document.getElementById('local-save-btn');
-
-                    if (localItem) {
-                        statusText.innerHTML = `<span class="accent">${localItem.status}</span> - Aflevering ${localItem.progress} / ${m.episodes || '?'}`;
-                        selectEl.value = localItem.status;
-                        progressInput.value = localItem.progress;
-                    } else {
-                        statusText.innerHTML = `<span class="text-zinc-500">Niet in je bibliotheek</span>`;
-                        progressInput.value = app.ep;
-                    }
-
-                    saveBtn.onclick = () => {
-                        window.updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12);
-                    };
-
-                    const grid = document.getElementById('ep-grid');
-                    for(let i=1; i<=(m.episodes || 24); i++) {
-                        grid.innerHTML += `<button onclick="nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-lg font-black text-[10px] ${i==app.ep?'bg-accent text-black shadow-lg':'bg-zinc-900 text-zinc-500'}">${i}</button>`;
-                    }
-
-                    const relGrid = document.getElementById('rel-grid');
-                    m.relations.edges.filter(e => e.node.type === 'ANIME').forEach(e => {
-                        const rTitle = app.lang === 'english' ? (e.node.title.english || e.node.title.romaji) : e.node.title.romaji;
-                        relGrid.innerHTML += `
-                            <button onclick="nav('watch', {id:${e.node.id}})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
-                                <div class="truncate pr-4">
-                                    <p class="truncate text-white">${rTitle}</p>
-                                    <p class="text-[7px] text-zinc-600 mt-0.5">${e.relationType.replace(/_/g, ' ')}</p>
-                                </div>
-                                <i class="fa-solid fa-chevron-right text-zinc-800 text-[10px]"></i>
-                            </button>
-                        `;
-                    });
-                });
-            }
-
-            else if (app.view === 'profile') {
-                main.innerHTML = `
-                    <div class="max-w-md mx-auto space-y-6">
-                        <div class="card p-8 border border-accent/20 shadow-2xl">
-                            <div class="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
-                                <h2 class="font-black uppercase text-sm flex items-center gap-2"><i class="fa-solid fa-sliders accent"></i> Settings</h2>
-                                <span class="bg-accent/10 border border-accent/20 text-accent text-[9px] px-3 py-1 rounded-full uppercase font-black">User: ${currentUser ? currentUser.username : ''}</span>
-                            </div>
+            try {
+                if (app.view === 'watch') {
+                    main.innerHTML = `
+                        <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl animate-fade-in relative">
+                            <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
                             
-                            <div class="space-y-4">
-                                <label class="flex items-center justify-between p-2 cursor-pointer">
-                                    <span class="text-xs font-black uppercase text-zinc-400">Show continue watching on home page</span>
-                                    <input type="checkbox" id="set-continue" class="toggle-checkbox hidden" ${app.showContinue?'checked':''}>
+                            <!-- Custom Skip Intro Button -->
+                            ${app.autoSkipIntro ? `
+                                <button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50">
+                                    <i class="fa-solid fa-forward-fast"></i> Skip Intro (+${app.skipSeconds}s)
+                                </button>
+                            ` : ''}
+                        </div>
+
+                        <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4 shadow-lg">
+                            <div class="flex gap-2">
+                                <button onclick="app.mode='sub';saveCloudData();render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
+                                <button onclick="app.mode='dub';saveCloudData();render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
+                            </div>
+                            <div class="flex items-center gap-4">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="toggle-autonext" class="toggle-checkbox hidden">
                                     <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                    <span class="text-[9px] font-black uppercase text-zinc-400">Auto Next</span>
                                 </label>
-
-                                <div class="flex items-center justify-between p-2">
-                                    <span class="text-xs font-black uppercase text-zinc-400">Language for Anime Name</span>
-                                    <div class="flex gap-4">
-                                        <label class="flex items-center gap-1.5 text-xs font-bold"><input type="radio" name="lang" value="english" ${app.lang=='english'?'checked':''}> English</label>
-                                        <label class="flex items-center gap-1.5 text-xs font-bold"><input type="radio" name="lang" value="japanese" ${app.lang=='japanese'?'checked':''}> Japanese</label>
-                                    </div>
-                                </div>
-
-                                <div class="p-2 border-t border-white/5 pt-4">
-                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username (Voor openbare sync)</label>
-                                    <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
-                                </div>
-
-                                <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest mt-4">Save Settings</button>
                             </div>
                         </div>
 
-                        <!-- EXPORT NAAR MYANIMELIST XML COMPATIBEL FORMAAT -->
-                        <div class="card p-8 border border-green-500/20 text-center">
-                            <h2 class="font-black uppercase mb-2 text-sm">Download MAL-XML Exporteer</h2>
-                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Exporteer je eigen cloud-database direct als MyAnimeList XML-bestand!</p>
-                            <button onclick="exportMyAnimeListXML()" class="block w-full bg-zinc-900 hover:bg-accent hover:text-black text-white font-black py-4 rounded-xl text-[10px] uppercase tracking-widest border border-white/15 transition-all">
-                                <i class="fa-solid fa-file-export mr-1.5"></i> Download MyAnimeList XML
-                            </button>
-                        </div>
-
-                        <!-- XML/HiAnime/JSON Importeer functionaliteit -->
-                        <div class="card p-8 border border-white/5 text-center">
-                            <h2 class="font-black uppercase mb-4 text-sm">Import XML / JSON Watchlist (HiAnime & MAL)</h2>
-                            <input type="file" id="xml-input" class="text-[10px] text-zinc-500 mb-6 block mx-auto">
-                            <button onclick="handleXML()" class="w-full bg-zinc-800 py-3 rounded-lg text-[10px] font-black uppercase border border-white/10">Upload Database</button>
-                        </div>
-
-                        <!-- PERMANENT ACC VERWIJDEREN (Met confirm typing) -->
-                        <div class="card p-8 border border-red-500/20 text-center bg-red-950/10">
-                            <h2 class="font-black uppercase mb-2 text-sm text-red-400">Gevaar Zone</h2>
-                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Wis je account, inloggegevens en alle gesynchroniseerde watchlists definitief uit de database.</p>
-                            <button onclick="deleteAccountPermanently()" class="block w-full bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-4 rounded-xl text-[10px] uppercase tracking-widest border border-red-500/20 transition-all">
-                                <i class="fa-solid fa-trash-alt mr-1.5"></i> Permanent Account Verwijderen
-                            </button>
-                        </div>
-                    </div>
-                `;
-            }
-
-            else if (app.view === 'library') {
-                main.innerHTML = `
-                    <div class="flex items-center justify-between mb-4 flex-wrap gap-2 animate-fade-in">
-                        <h2 class="text-xl font-black accent uppercase italic">Local Library</h2>
-                        <span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span>
-                    </div>
-
-                    <!-- Horizontale Filters -->
-                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
-                        <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
-                        <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
-                        <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
-                        <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
-                    </div>
-
-                    <div id="xml-display-grid" class="space-y-3 mt-2"></div>
-                `;
-
-                const grid = document.getElementById('xml-display-grid');
-                if(!app.xmlLib.length) {
-                    grid.innerHTML = `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen data gevonden. Importeer een XML/JSON bestand of begin met kijken!</p>`;
-                    return;
-                }
-
-                let filteredXml = app.xmlLib;
-                if(app.libraryFilter !== 'All') {
-                    filteredXml = app.xmlLib.filter(item => item.status === app.libraryFilter);
-                }
-
-                if(filteredXml.length === 0) {
-                    grid.innerHTML = `<p class="opacity-20 text-xs text-center py-10 uppercase font-black">Geen items gevonden in deze map</p>`;
-                    return;
-                }
-
-                filteredXml.forEach(item => {
-                    grid.innerHTML += `
-                        <div class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-white/5 shadow-md animate-fade-in">
-                            <div class="truncate pr-4 flex-1">
-                                <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
-                                    <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: ${item.progress} / ${item.episodes || '?'}</span>
-                                </div>
-                            </div>
-                            
-                            <div class="flex items-center gap-2 self-end sm:self-auto">
-                                <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black p-2.5 rounded-lg text-xs text-zinc-400 transition-colors"><i class="fa-solid fa-play"></i> Watch</button>
-                                <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400 font-black" title="Volgende aflevering">+1 Ep</button>
-                                <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
-                                <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-2.5 rounded-lg text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
-                            </div>
-                        </div>
-                    `;
-                });
-            }
-
-            else if (app.view === 'cloud') {
-                if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Voeg je AniList gebruikersnaam toe bij Instellingen</p>`;
-                
-                main.innerHTML = `
-                    <div class="flex items-center justify-between mb-4 animate-fade-in">
-                        <h2 class="text-xl font-black accent uppercase italic">Cloud List: ${app.user}</h2>
-                    </div>
-                    
-                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
-                        <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All Lists</button>
-                        <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
-                        <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
-                        <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
-                    </div>
-
-                    <div id="c-list" class="grid grid-cols-2 gap-4">Laden...</div>
-                `;
-
-                gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user}).then(res => {
-                    const list = document.getElementById('c-list');
-                    if (!res || !res.data || !res.data.MediaListCollection) {
-                        list.innerHTML = `<p class="col-span-2 text-center py-10 opacity-30 text-xs font-black uppercase">Kon de openbare AniList van ${app.user} niet vinden of laden.</p>`;
-                        return;
-                    }
-                    
-                    list.innerHTML = '';
-                    let itemsFound = false;
-                    res.data.MediaListCollection.lists.forEach(l => {
-                        const listName = l.name.toLowerCase();
-                        const filterLower = app.cloudFilter.toLowerCase();
+                        <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">Laden...</h1>
                         
-                        if(app.cloudFilter !== 'All' && !listName.includes(filterLower)) return;
+                        <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between shadow-lg">
+                            <div>
+                                <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud database)</p>
+                                <h3 id="local-status-text" class="text-xs font-bold text-white mt-1">Laden...</h3>
+                            </div>
+                            <div class="flex gap-2 flex-wrap">
+                                <select id="local-status-select" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 font-bold outline-none">
+                                    <option value="Watching">Watching</option>
+                                    <option value="Watched">Completed</option>
+                                    <option value="Dropped">Dropped</option>
+                                </select>
+                                <input type="number" id="local-progress-input" value="0" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 w-16 text-center font-bold outline-none">
+                                <button id="local-save-btn" class="bg-accent text-black px-4 py-2 rounded-lg text-xs font-black uppercase">Opslaan</button>
+                            </div>
+                        </div>
 
-                        l.entries.forEach(e => {
-                            itemsFound = true;
-                            const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
-                            list.innerHTML += `
-                                <div class="text-left w-full group relative animate-fade-in">
-                                    <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="w-full text-left">
-                                        <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5">
-                                            <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-300">
-                                            <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
-                                                <span class="text-[8px] font-black accent uppercase bg-black/60 px-2 py-1 rounded">Resume Ep ${e.progress+1}</span>
-                                            </div>
-                                        </div>
-                                        <p class="text-[9px] font-black uppercase truncate text-zinc-300 leading-none mb-1">${t}</p>
-                                        <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black mb-2">${l.name}</p>
-                                    </button>
-                                    
-                                    <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md">
-                                        <i class="fa-solid fa-cloud-arrow-down mr-1"></i> Import
-                                    </button>
-                                </div>
+                        <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8"></div>
+                        <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4 tracking-widest">Related Seasons</h2>
+                        <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+                    `;
+
+                    const autoNext = document.getElementById('toggle-autonext');
+                    autoNext.checked = app.autoNext;
+                    autoNext.addEventListener('change', e => { 
+                        app.autoNext = e.target.checked; 
+                        saveCloudData(); 
+                    });
+
+                    gql(`query($id:Int){Media(id:$id){title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                        if (!res || !res.data) {
+                            document.getElementById('w-title').innerText = "Informatie niet gevonden";
+                            return;
+                        }
+                        const m = res.data.Media;
+                        const title = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                        document.getElementById('w-title').innerText = title;
+                        
+                        saveRecent(app.id, title, m.coverImage.large, app.ep);
+
+                        const localItem = app.xmlLib.find(item => item.id == app.id);
+                        const statusText = document.getElementById('local-status-text');
+                        const selectEl = document.getElementById('local-status-select');
+                        const progressInput = document.getElementById('local-progress-input');
+                        const saveBtn = document.getElementById('local-save-btn');
+
+                        if (localItem) {
+                            statusText.innerHTML = `<span class="accent">${localItem.status}</span> - Aflevering ${localItem.progress} / ${m.episodes || '?'}`;
+                            selectEl.value = localItem.status;
+                            progressInput.value = localItem.progress;
+                        } else {
+                            statusText.innerHTML = `<span class="text-zinc-500">Niet in je bibliotheek</span>`;
+                            progressInput.value = app.ep;
+                        }
+
+                        saveBtn.onclick = () => {
+                            window.updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12);
+                        };
+
+                        const grid = document.getElementById('ep-grid');
+                        for(let i=1; i<=(m.episodes || 24); i++) {
+                            grid.innerHTML += `<button onclick="nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-lg font-black text-[10px] ${i==app.ep?'bg-accent text-black shadow-lg':'bg-zinc-900 text-zinc-500'}">${i}</button>`;
+                        }
+
+                        const relGrid = document.getElementById('rel-grid');
+                        m.relations.edges.filter(e => e.node.type === 'ANIME').forEach(e => {
+                            const rTitle = app.lang === 'english' ? (e.node.title.english || e.node.title.romaji) : e.node.title.romaji;
+                            relGrid.innerHTML += `
+                                <button onclick="nav('watch', {id:${e.node.id}})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
+                                    <div class="truncate pr-4">
+                                        <p class="truncate text-white">${rTitle}</p>
+                                        <p class="text-[7px] text-zinc-600 mt-0.5">${e.relationType.replace(/_/g, ' ')}</p>
+                                    </div>
+                                    <i class="fa-solid fa-chevron-right text-zinc-800 text-[10px]"></i>
+                                </button>
                             `;
                         });
                     });
+                }
 
-                    if(!itemsFound) {
-                        list.className = "block text-center py-10 opacity-30";
-                        list.innerHTML = `<p class="text-xs uppercase font-black">Geen anime gevonden in deze lijst</p>`;
-                    }
-                });
-            }
-
-            else if (app.view === 'search') {
-                main.innerHTML = `
-                    <div class="max-w-md mx-auto mb-10">
-                        <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
-                    </div>
-                    <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
-                `;
-            }
-
-            else {
-                // HOME VIEW (Volledig hersteld)
-                main.innerHTML = `
-                    ${app.showContinue && app.recent.length ? `
-                        <h2 class="text-[10px] font-black uppercase mb-4 opacity-50 tracking-widest">Continue Watching (Cloud)</h2>
-                        <div class="flex gap-3 overflow-x-auto no-scrollbar mb-10">
-                            ${app.recent.map(r => `
-                                <button onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="flex-shrink-0 w-40 group text-left animate-fade-in">
-                                    <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2">
-                                        <img src="${r.img}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-500">
-                                        <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</div>
-                                    </div>
-                                    <p class="text-[9px] font-black uppercase truncate text-zinc-400 group-hover:text-white transition-colors">${r.title}</p>
-                                </button>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                    <h2 class="text-xs font-black uppercase tracking-widest mb-6">Trending Now</h2>
-                    <div id="h-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
-                `;
-                gql(`query{Page(perPage:24){media(type:ANIME,sort:TRENDING_DESC){id title{romaji english}coverImage{large}}}}`).then(res => {
-                    const grid = document.getElementById('h-grid');
-                    if(!grid || !res || !res.data) return;
-                    res.data.Page.media.forEach(m => {
-                        const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
-                        grid.innerHTML += `
-                            <button onclick="nav('watch', {id:${m.id}})" class="text-left group animate-fade-in">
-                                <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
-                                    <img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                else if (app.view === 'profile') {
+                    // Volledig hersteld en crash-beveiligd Profiel- en Instellingenscherm (ZONDER verwijderknop)
+                    main.innerHTML = `
+                        <div class="max-w-md mx-auto space-y-6 animate-fade-in">
+                            <div class="card p-8 border border-accent/20 shadow-2xl">
+                                <div class="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
+                                    <h2 class="font-black uppercase text-sm flex items-center gap-2"><i class="fa-solid fa-sliders accent"></i> Settings</h2>
+                                    <span class="bg-accent/10 border border-accent/20 text-accent text-[9px] px-3 py-1 rounded-full uppercase font-black">User: ${currentUser ? currentUser.username : 'Gekoppeld'}</span>
                                 </div>
-                                <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white transition-colors">${t}</p>
-                            </button>
+                                
+                                <div class="space-y-4">
+                                    <!-- Continue Watching instelling -->
+                                    <label class="flex items-center justify-between p-2 cursor-pointer">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Show continue watching on home</span>
+                                        <input type="checkbox" id="set-continue" class="toggle-checkbox hidden" ${app.showContinue ? 'checked' : ''}>
+                                        <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                    </label>
+
+                                    <!-- Auto Play instelling -->
+                                    <label class="flex items-center justify-between p-2 cursor-pointer">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Auto Play video</span>
+                                        <input type="checkbox" id="set-autoplay" class="toggle-checkbox hidden" ${app.autoPlay ? 'checked' : ''}>
+                                        <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                    </label>
+
+                                    <!-- Auto Next instelling -->
+                                    <label class="flex items-center justify-between p-2 cursor-pointer">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Auto Next episode</span>
+                                        <input type="checkbox" id="set-autonext" class="toggle-checkbox hidden" ${app.autoNext ? 'checked' : ''}>
+                                        <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                    </label>
+
+                                    <!-- Auto Skip Intro instelling -->
+                                    <label class="flex items-center justify-between p-2 cursor-pointer">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Enable skip intro button</span>
+                                        <input type="checkbox" id="set-autoskip" class="toggle-checkbox hidden" ${app.autoSkipIntro ? 'checked' : ''}>
+                                        <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                    </label>
+
+                                    <!-- Skip intro seconden -->
+                                    <div class="flex items-center justify-between p-2">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Skip intro seconds</span>
+                                        <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs outline-none font-sans">
+                                    </div>
+
+                                    <!-- Taal anime titels -->
+                                    <div class="flex items-center justify-between p-2">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Language for Anime Name</span>
+                                        <div class="flex gap-4">
+                                            <label class="flex items-center gap-1.5 text-xs font-bold cursor-pointer"><input type="radio" name="lang" value="english" ${app.lang=='english'?'checked':''}> English</label>
+                                            <label class="flex items-center gap-1.5 text-xs font-bold cursor-pointer"><input type="radio" name="lang" value="japanese" ${app.lang=='japanese'?'checked':''}> Japanese</label>
+                                        </div>
+                                    </div>
+
+                                    <!-- AniList username sync -->
+                                    <div class="p-2 border-t border-white/5 pt-4">
+                                        <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username (Voor openbare sync)</label>
+                                        <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
+                                    </div>
+
+                                    <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest mt-4">Save Settings</button>
+                                </div>
+                            </div>
+
+                            <!-- EXPORT NAAR MYANIMELIST XML COMPATIBEL FORMAAT -->
+                            <div class="card p-8 border border-green-500/20 text-center">
+                                <h2 class="font-black uppercase mb-2 text-sm">Download MAL-XML Exporteer</h2>
+                                <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Exporteer je eigen cloud-database direct als MyAnimeList XML-bestand!</p>
+                                <button onclick="exportMyAnimeListXML()" class="block w-full bg-zinc-900 hover:bg-accent hover:text-black text-white font-black py-4 rounded-xl text-[10px] uppercase tracking-widest border border-white/15 transition-all">
+                                    <i class="fa-solid fa-file-export mr-1.5"></i> Download MyAnimeList XML
+                                </button>
+                            </div>
+
+                            <!-- XML Upload (MAL of HiAnime) -->
+                            <div class="card p-8 border border-white/5 text-center">
+                                <h2 class="font-black uppercase mb-4 text-sm">Import XML / JSON Watchlist (HiAnime & MAL)</h2>
+                                <input type="file" id="xml-input" class="text-[10px] text-zinc-500 mb-6 block mx-auto">
+                                <button onclick="handleXML()" class="w-full bg-zinc-800 py-3 rounded-lg text-[10px] font-black uppercase border border-white/10">Upload Database</button>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                else if (app.view === 'library') {
+                    main.innerHTML = `
+                        <div class="flex items-center justify-between mb-4 flex-wrap gap-2 animate-fade-in">
+                            <h2 class="text-xl font-black accent uppercase italic">Local Library</h2>
+                            <span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span>
+                        </div>
+
+                        <!-- Horizontale Filters -->
+                        <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
+                            <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
+                            <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                            <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                            <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                        </div>
+
+                        <div id="xml-display-grid" class="space-y-3 mt-2"></div>
+                    `;
+
+                    const grid = document.getElementById('xml-display-grid');
+                    if(!app.xmlLib.length) {
+                        grid.innerHTML = `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen data gevonden. Importeer een XML/JSON bestand of begin met kijken!</p>`;
+                        return;
+                    }
+
+                    let filteredXml = app.xmlLib;
+                    if(app.libraryFilter !== 'All') {
+                        filteredXml = app.xmlLib.filter(item => item.status === app.libraryFilter);
+                    }
+
+                    if(filteredXml.length === 0) {
+                        grid.innerHTML = `<p class="opacity-20 text-xs text-center py-10 uppercase font-black">Geen items gevonden in deze map</p>`;
+                        return;
+                    }
+
+                    filteredXml.forEach(item => {
+                        grid.innerHTML += `
+                            <div class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-white/5 shadow-md animate-fade-in">
+                                <div class="truncate pr-4 flex-1">
+                                    <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
+                                        <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: ${item.progress} / ${item.episodes || '?'}</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="flex items-center gap-2 self-end sm:self-auto">
+                                    <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black p-2.5 rounded-lg text-xs text-zinc-400 transition-colors"><i class="fa-solid fa-play"></i> Watch</button>
+                                    <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400 font-black" title="Volgende aflevering">+1 Ep</button>
+                                    <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
+                                    <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-2.5 rounded-lg text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            </div>
                         `;
                     });
-                });
+                }
+
+                else if (app.view === 'cloud') {
+                    if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Voeg je AniList gebruikersnaam toe bij Instellingen</p>`;
+                    
+                    main.innerHTML = `
+                        <div class="flex items-center justify-between mb-4 animate-fade-in">
+                            <h2 class="text-xl font-black accent uppercase italic">Cloud List: ${app.user}</h2>
+                        </div>
+                        
+                        <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
+                            <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All Lists</button>
+                            <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                            <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                            <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                        </div>
+
+                        <div id="c-list" class="grid grid-cols-2 gap-4">Laden...</div>
+                    `;
+
+                    gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user}).then(res => {
+                        const list = document.getElementById('c-list');
+                        if (!res || !res.data || !res.data.MediaListCollection) {
+                            list.innerHTML = `<p class="col-span-2 text-center py-10 opacity-30 text-xs font-black uppercase">Kon de openbare AniList van ${app.user} niet vinden of laden.</p>`;
+                            return;
+                        }
+                        
+                        list.innerHTML = '';
+                        let itemsFound = false;
+                        res.data.MediaListCollection.lists.forEach(l => {
+                            const listName = l.name.toLowerCase();
+                            const filterLower = app.cloudFilter.toLowerCase();
+                            
+                            if(app.cloudFilter !== 'All' && !listName.includes(filterLower)) return;
+
+                            l.entries.forEach(e => {
+                                itemsFound = true;
+                                const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
+                                list.innerHTML += `
+                                    <div class="text-left w-full group relative animate-fade-in">
+                                        <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="w-full text-left">
+                                            <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5">
+                                                <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-300">
+                                                <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
+                                                    <span class="text-[8px] font-black accent uppercase bg-black/60 px-2 py-1 rounded">Resume Ep ${e.progress+1}</span>
+                                                </div>
+                                            </div>
+                                            <p class="text-[9px] font-black uppercase truncate text-zinc-300 leading-none mb-1">${t}</p>
+                                            <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black mb-2">${l.name}</p>
+                                        </button>
+                                        
+                                        <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md">
+                                            <i class="fa-solid fa-cloud-arrow-down mr-1"></i> Import
+                                        </button>
+                                    </div>
+                                `;
+                            });
+                        });
+
+                        if(!itemsFound) {
+                            list.className = "block text-center py-10 opacity-30";
+                            list.innerHTML = `<p class="text-xs uppercase font-black">Geen anime gevonden in deze lijst</p>`;
+                        }
+                    });
+                }
+
+                else if (app.view === 'search') {
+                    main.innerHTML = `
+                        <div class="max-w-md mx-auto mb-10">
+                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                        </div>
+                        <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
+                    `;
+                }
+
+                else {
+                    // HOME VIEW (Continue Watching + Trending)
+                    main.innerHTML = `
+                        ${app.showContinue && app.recent.length ? `
+                            <h2 class="text-[10px] font-black uppercase mb-4 opacity-50 tracking-widest">Continue Watching (Cloud)</h2>
+                            <div class="flex gap-3 overflow-x-auto no-scrollbar mb-10">
+                                ${app.recent.map(r => `
+                                    <button onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="flex-shrink-0 w-40 group text-left animate-fade-in">
+                                        <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2">
+                                            <img src="${r.img}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-500">
+                                            <div class="absolute bottom-2 right-2 bg-black/85 px-2 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</div>
+                                        </div>
+                                        <p class="text-[9px] font-black uppercase truncate text-zinc-400 group-hover:text-white transition-colors">${r.title}</p>
+                                    </button>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+                        <h2 class="text-xs font-black uppercase tracking-widest mb-6">Trending Now</h2>
+                        <div id="h-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
+                    `;
+                    gql(`query{Page(perPage:24){media(type:ANIME,sort:TRENDING_DESC){id title{romaji english}coverImage{large}}}}`).then(res => {
+                        const grid = document.getElementById('h-grid');
+                        if(!grid || !res || !res.data) return;
+                        res.data.Page.media.forEach(m => {
+                            const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                            grid.innerHTML += `
+                                <button onclick="nav('watch', {id:${m.id}})" class="text-left group animate-fade-in">
+                                    <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
+                                        <img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                                    </div>
+                                    <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white transition-colors">${t}</p>
+                                </button>
+                            `;
+                        });
+                    });
+                }
+            } catch(error) {
+                console.error("Fout tijdens renderen:", error);
             }
         }
 
-        // --- BIBLIOTHEEK ACTIEHULPJES ---
-        window.quickIncrement = function(id) {
-            app.xmlLib = app.xmlLib.map(item => {
-                if (item.id == id) {
-                    const nextProgress = item.progress + 1;
-                    return { ...item, progress: nextProgress };
-                }
-                return item;
-            });
-            saveCloudData();
-            render();
-        };
-
-        window.changeLocalFolderPrompt = function(id) {
-            const item = app.xmlLib.find(i => i.id == id);
-            if (!item) return;
-            const newStatus = prompt("Typ een nieuwe status (Watching, Watched, Dropped):", item.status);
-            if (newStatus && ["Watching", "Watched", "Dropped"].includes(newStatus)) {
-                updateLocalItem(item.id, item.title, newStatus, item.progress, item.episodes);
-            } else if (newStatus) {
-                window.showToast("Ongeldige status! Gebruik Watching, Watched of Dropped.", "error");
+        // --- SKIP INTRO LOGICA (Zowel handmatig als auto-skip) ---
+        window.skipIntroTime = function() {
+            const player = document.getElementById('player');
+            if (player) {
+                // Post message naar Megaplay buzz stream player API om te skippen
+                player.contentWindow.postMessage(JSON.stringify({
+                    event: "command",
+                    command: "seek",
+                    value: app.skipSeconds
+                }), "*");
+                window.showToast(`Intro overgeslagen met +${app.skipSeconds} seconden!`);
             }
         };
 
-        window.importSingleCloudItem = function(id, title, cloudStatus, progress, totalEpisodes) {
-            let localStatus = "Watching";
-            if (cloudStatus.toLowerCase().includes("completed")) localStatus = "Watched";
-            if (cloudStatus.toLowerCase().includes("dropped")) localStatus = "Dropped";
-
-            updateLocalItem(id, title, localStatus, progress, totalEpisodes);
-        };
-
-        // --- MYANIMELIST XML EXPORTER ---
-        window.exportMyAnimeListXML = function() {
-            if(!app.xmlLib.length) {
-                window.showToast("Geen items in je bibliotheek om te exporteren!", "error");
-                return;
-            }
-
-            let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n`;
-            xml += `<!--\n  Exported from AnimeMax Pro (Cloud Database Edition)\n  Format: MyAnimeList XML Import/Export standard v1.0.0\n-->\n`;
-            xml += `<myanimelist>\n`;
-            
-            xml += `  <myinfo>\n`;
-            xml += `    <user_id>0</user_id>\n`;
-            xml += `    <user_name>${app.user}</user_name>\n`;
-            xml += `    <user_export_type>1</user_export_type>\n`;
-            xml += `    <user_total_anime>${app.xmlLib.length}</user_total_anime>\n`;
-            xml += `  </myinfo>\n`;
-
-            app.xmlLib.forEach(item => {
-                let statusVal = "Watching"; 
-                if (item.status === "Watched") statusVal = "Completed";
-                if (item.status === "Dropped") statusVal = "Dropped";
-                if (item.status === "Plan to Watch") statusVal = "Plan to Watch";
-
-                xml += `  <anime>\n`;
-                xml += `    <series_animedb_id>${item.id}</series_animedb_id>\n`;
-                xml += `    <series_title><![CDATA[${item.title}]]></series_title>\n`;
-                xml += `    <series_type>TV</series_type>\n`;
-                xml += `    <series_episodes>${item.episodes || 0}</series_episodes>\n`;
-                xml += `    <my_id>0</my_id>\n`;
-                xml += `    <my_watched_episodes>${item.progress || 0}</my_watched_episodes>\n`;
-                xml += `    <my_start_date>0000-00-00</my_start_date>\n`;
-                xml += `    <my_finish_date>0000-00-00</my_finish_date>\n`;
-                xml += `    <my_score>0</my_score>\n`;
-                xml += `    <my_status>${statusVal}</my_status>\n`;
-                xml += `    <my_rewatching></my_rewatching>\n`;
-                xml += `    <my_rewatching_ep>0</my_rewatching_ep>\n`;
-                xml += `    <my_last_updated>${Math.floor(Date.now() / 1000)}</my_last_updated>\n`;
-                xml += `    <my_tags><![CDATA[]]></my_tags>\n`;
-                xml += `  </anime>\n`;
-            });
-
-            xml += `</myanimelist>\n`;
-
-            const blob = new Blob([xml], { type: "text/xml" });
-            const url = URL.createObjectURL(blob);
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.href = url;
-            downloadAnchor.download = `animemax_${app.user}_mal_export_${new Date().toISOString().slice(0,10)}.xml`;
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-            URL.revokeObjectURL(url);
-            window.showToast("XML export gedownload!");
-        };
-
-        // --- SETTINGS EN FILTERS LOGICA ---
-        window.filterCloud = function(status) {
-            app.cloudFilter = status;
-            render();
-        };
-
-        window.filterXml = function(status) {
-            app.libraryFilter = status;
-            render();
-        };
-
+        // --- SAVE PROFILE SETTINGS ---
         window.saveSet = function() {
-            app.user = document.getElementById('set-user').value.trim();
-            app.lang = document.querySelector('input[name="lang"]:checked').value;
-            app.showContinue = document.getElementById('set-continue').checked;
+            const setContinueEl = document.getElementById('set-continue');
+            const setAutoplayEl = document.getElementById('set-autoplay');
+            const setAutonextEl = document.getElementById('set-autonext');
+            const setAutoskipEl = document.getElementById('set-autoskip');
+            const setSecondsEl = document.getElementById('set-seconds');
+            const setUsernameEl = document.getElementById('set-user');
+            const langCheckedEl = document.querySelector('input[name="lang"]:checked');
+
+            if (setUsernameEl) app.user = setUsernameEl.value.trim();
+            if (langCheckedEl) app.lang = langCheckedEl.value;
+            if (setContinueEl) app.showContinue = setContinueEl.checked;
+            if (setAutoplayEl) app.autoPlay = setAutoplayEl.checked;
+            if (setAutonextEl) app.autoNext = setAutonextEl.checked;
+            if (setAutoskipEl) app.autoSkipIntro = setAutoskipEl.checked;
+            
+            if (setSecondsEl) {
+                const secondsVal = parseInt(setSecondsEl.value);
+                app.skipSeconds = isNaN(secondsVal) ? 5 : secondsVal;
+            }
 
             saveCloudData();
             window.showToast("Instellingen opgeslagen!");
@@ -849,7 +804,7 @@
             });
         };
 
-        // --- XML EN JSON WATCHLIST IMPORTEER-ENGINE (HiAnime & MAL) ---
+        // --- XML EN JSON WATCHLIST IMPORTEER-ENGINE (HiAnime & MyAnimeList) ---
         window.handleXML = function() {
             const file = document.getElementById('xml-input').files[0];
             if(!file) return;
