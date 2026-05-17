@@ -43,7 +43,7 @@
             <p id="confirm-message" class="text-zinc-400 text-xs leading-relaxed mb-6"></p>
             <div class="flex gap-3">
                 <button id="confirm-cancel-btn" class="flex-1 bg-zinc-900 border border-white/5 py-3 rounded-xl text-xs font-black uppercase">Annuleren</button>
-                <button id="confirm-ok-btn" class="flex-1 bg-[#cae962] text-black py-3 rounded-xl text-xs font-black uppercase">Bevestigen</button>
+                <button id="confirm-ok-btn" class="flex-1 bg-accent text-black py-3 rounded-xl text-xs font-black uppercase">Bevestigen</button>
             </div>
         </div>
     </div>
@@ -66,7 +66,7 @@
     <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
         <div class="text-center py-24">
             <i class="fa-solid fa-circle-notch animate-spin text-4xl accent mb-4"></i>
-            <p class="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Laden en database verbinden...</p>
+            <p class="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Veilige database verbinden...</p>
         </div>
     </main>
 
@@ -81,12 +81,12 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Jouw rechtstreeks gekoppelde Supabase Database instellingen (100% automatisch!)
+        // Jouw rechtstreeks gekoppelde Supabase Database instellingen
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
         let sb = null;
-        let currentUser = null;
+        let sessionData = null;
 
         // Globale App Toestand
         let app = {
@@ -128,8 +128,8 @@
             okBtn.onclick = () => { close(); onConfirm(); };
         };
 
-        // --- AUTOMATISCHE START-CHECK ---
-        window.onload = () => {
+        // --- INITIALISATIE MET RLS EN AUTH ---
+        window.onload = async () => {
             try {
                 if (typeof window.supabase !== 'undefined') {
                     sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -137,10 +137,11 @@
                     throw new Error("Supabase library niet geladen");
                 }
 
-                const lastSession = localStorage.getItem('amax_cloud_session');
-                if (lastSession) {
-                    const parsed = JSON.parse(lastSession);
-                    handleAuth('login', parsed.username, parsed.password);
+                // Check bestaande actieve sessie
+                const { data: { session } } = await sb.auth.getSession();
+                if (session) {
+                    sessionData = session;
+                    await loadCloudData();
                 } else {
                     showLoginPage('login');
                 }
@@ -150,7 +151,7 @@
             }
         };
 
-        // --- INLOGGEN EN REGISTREREN ---
+        // --- INLOGGEN EN REGISTREREN (Supabase Auth Module) ---
         function showLoginPage(mode = 'login') {
             document.getElementById('app-header').classList.add('hidden');
             document.getElementById('app-navigation').classList.add('hidden');
@@ -161,7 +162,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Maak een nieuw cloud-profiel aan</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Maak een nieuw RLS-beveiligd cloud-profiel aan</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -171,7 +172,7 @@
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Wachtwoord</label>
                                 <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
                             </div>
-                            <button onclick="handleAuth('reg')" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest">Profiel Aanmaken</button>
+                            <button onclick="handleAuth('reg')" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest">Account Aanmaken</button>
                             <p class="text-center text-xs text-zinc-500 mt-4">Heb je al een account? <button onclick="showLoginPage('login')" class="accent font-bold hover:underline">Inloggen</button></p>
                         </div>
                     </div>
@@ -180,7 +181,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel (RLS)</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -191,58 +192,81 @@
                                 <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
                             </div>
                             <button onclick="handleAuth('login')" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest">Inloggen</button>
-                            <p class="text-center text-xs text-zinc-500 mt-4">Nieuw account nodig? <button onclick="showLoginPage('register')" class="accent font-bold hover:underline">Registreren</button></p>
+                            <p class="text-center text-xs text-zinc-500 mt-4">Nieuwe gebruiker? <button onclick="showLoginPage('register')" class="accent font-bold hover:underline">Registreer hier</button></p>
                         </div>
                     </div>
                 `;
             }
         }
 
-        async function handleAuth(type, explicitUser = null, explicitPass = null) {
-            const u = explicitUser || document.getElementById('auth-username').value.trim();
-            const p = explicitPass || document.getElementById('auth-password').value.trim();
+        async function handleAuth(type) {
+            const u = document.getElementById('auth-username').value.trim();
+            const p = document.getElementById('auth-password').value.trim();
             if (!u || !p) return window.showToast("Vul alle velden in!", "error");
 
+            // Virtuele veilige e-mailstructuur voor de Auth Module
+            const email = `${u.toLowerCase()}@animemax.local`;
+
             if (type === 'reg') {
-                const { error } = await sb.from('anime_users').insert([{ username: u, password: btoa(p) }]);
+                const { data, error } = await sb.auth.signUp({ email, password: p });
                 if (error) {
-                    window.showToast("Gebruikersnaam is al bezet of database is offline.", "error");
-                } else {
-                    window.showToast("Account aangemaakt! Je kunt nu inloggen.");
-                    showLoginPage('login');
-                }
-            } else {
-                const { data, error } = await sb.from('anime_users').select('*').eq('username', u).eq('password', btoa(p)).single();
-                if (error || !data) {
-                    if (!explicitUser) window.showToast("Inloggegevens zijn onjuist.", "error");
-                    showLoginPage('login');
+                    window.showToast("Registratie mislukt: " + error.message, "error");
                     return;
                 }
                 
-                currentUser = data;
-                localStorage.setItem('amax_cloud_session', JSON.stringify({ username: u, password: p }));
-                
-                // Laad alle cloudgegevens direct in
-                app.xmlLib = data.watchlist || [];
-                app.recent = data.recent || [];
-                if (data.settings) {
-                    app.mode = data.settings.mode || 'sub';
-                    app.user = data.settings.user || 'Kozjo09';
-                    app.showContinue = data.settings.showContinue !== false;
-                    app.lang = data.settings.lang || 'english';
-                    app.autoPlay = data.settings.autoPlay !== false;
-                    app.autoNext = data.settings.autoNext !== false;
+                if (data.user) {
+                    // Maak de rij aan in public.anime_users gekoppeld aan de auth uuid
+                    const { error: insertErr } = await sb.from('anime_users').insert([{
+                        id: data.user.id,
+                        username: u,
+                        watchlist: [],
+                        recent: []
+                    }]);
+                    if(insertErr) {
+                        console.error("Profiel insert fout:", insertErr);
+                    }
                 }
-
-                document.getElementById('app-header').classList.remove('hidden');
-                document.getElementById('app-navigation').classList.remove('hidden');
-                window.showToast(`Succesvol verbonden als ${u}!`);
-                nav('home');
+                window.showToast("Geregistreerd! Je kunt nu inloggen.");
+                showLoginPage('login');
+            } else {
+                const { data, error } = await sb.auth.signInWithPassword({ email, password: p });
+                if (error) {
+                    window.showToast("Gebruikersnaam of wachtwoord onjuist.", "error");
+                    return;
+                }
+                sessionData = data.session;
+                await loadCloudData();
             }
         }
 
+        async function loadCloudData() {
+            if (!sessionData) return;
+            const { data, error } = await sb.from('anime_users').select('*').eq('id', sessionData.user.id).single();
+            if (error || !data) {
+                console.error("Fout bij laden cloud-data:", error);
+                return;
+            }
+
+            // Hydrateer app state
+            app.xmlLib = data.watchlist || [];
+            app.recent = data.recent || [];
+            if (data.settings) {
+                app.mode = data.settings.mode || 'sub';
+                app.user = data.settings.user || 'Kozjo09';
+                app.showContinue = data.settings.showContinue !== false;
+                app.lang = data.settings.lang || 'english';
+                app.autoPlay = data.settings.autoPlay !== false;
+                app.autoNext = data.settings.autoNext !== false;
+            }
+
+            document.getElementById('app-header').classList.remove('hidden');
+            document.getElementById('app-navigation').classList.remove('hidden');
+            window.showToast(`Welkom, ${data.username}!`);
+            nav('home');
+        }
+
         async function saveCloudData() {
-            if (!currentUser) return;
+            if (!sessionData) return;
             const { error } = await sb.from('anime_users').update({
                 watchlist: app.xmlLib,
                 recent: app.recent,
@@ -254,13 +278,13 @@
                     autoPlay: app.autoPlay,
                     autoNext: app.autoNext
                 }
-            }).eq('id', currentUser.id);
+            }).eq('id', sessionData.user.id);
             if (error) console.error("Cloud synchronisatie fout:", error);
         }
 
-        function logout() {
-            localStorage.removeItem('amax_cloud_session');
-            currentUser = null;
+        async function logout() {
+            await sb.auth.signOut();
+            sessionData = null;
             showLoginPage('login');
         }
 
@@ -281,7 +305,7 @@
         }
 
         function nav(view, params = {}) {
-            if (!currentUser) return showLoginPage('login');
+            if (!sessionData) return showLoginPage('login');
             app.view = view;
             app.id = params.id || null;
             app.ep = params.ep || 1;
@@ -312,7 +336,7 @@
             }
 
             saveCloudData();
-            window.showToast("Realtime opgeslagen in de cloud!");
+            window.showToast("Realtime gesynchroniseerd!");
             render();
         };
 
@@ -329,11 +353,11 @@
         };
 
         function render() {
-            if (!currentUser) return showLoginPage('login');
+            if (!sessionData) return showLoginPage('login');
             const main = document.getElementById('content');
             if(!main) return;
             
-            // Sync navigatie knoppen
+            // Sync bottom-nav buttons
             document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('accent'));
             document.querySelectorAll('.nav-link').forEach(el => el.classList.add('text-zinc-600'));
             const activeNav = document.getElementById('nav-' + app.view);
@@ -345,7 +369,7 @@
 
             if (app.view === 'watch') {
                 main.innerHTML = `
-                    <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl">
+                    <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl animate-fade-in">
                         <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
                     </div>
 
@@ -450,7 +474,6 @@
                         <div class="card p-8 border border-accent/20 shadow-2xl">
                             <div class="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
                                 <h2 class="font-black uppercase text-sm flex items-center gap-2"><i class="fa-solid fa-sliders accent"></i> Settings</h2>
-                                <span class="bg-accent/10 border border-accent/20 text-accent text-[9px] px-3 py-1 rounded-full uppercase font-black">User: ${currentUser.username}</span>
                             </div>
                             
                             <div class="space-y-4">
@@ -663,7 +686,7 @@
             }
         }
 
-        // --- BIBLIOTHEEK ACTIEHULPJES ---
+        // --- HULPFUNCTIES ---
         window.quickIncrement = function(id) {
             app.xmlLib = app.xmlLib.map(item => {
                 if (item.id == id) {
@@ -695,73 +718,7 @@
             updateLocalItem(id, title, localStatus, progress, totalEpisodes);
         };
 
-        // --- MYANIMELIST XML EXPORTER ---
-        window.exportMyAnimeListXML = function() {
-            if(!app.xmlLib.length) {
-                window.showToast("Geen items in je bibliotheek om te exporteren!", "error");
-                return;
-            }
-
-            let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n`;
-            xml += `<!--\n  Exported from AnimeMax Pro (Cloud Database Edition)\n  Format: MyAnimeList XML Import/Export standard v1.0.0\n-->\n`;
-            xml += `<myanimelist>\n`;
-            
-            xml += `  <myinfo>\n`;
-            xml += `    <user_id>0</user_id>\n`;
-            xml += `    <user_name>${app.user}</user_name>\n`;
-            xml += `    <user_export_type>1</user_export_type>\n`;
-            xml += `    <user_total_anime>${app.xmlLib.length}</user_total_anime>\n`;
-            xml += `  </myinfo>\n`;
-
-            app.xmlLib.forEach(item => {
-                let statusVal = "Watching"; 
-                if (item.status === "Watched") statusVal = "Completed";
-                if (item.status === "Dropped") statusVal = "Dropped";
-                if (item.status === "Plan to Watch") statusVal = "Plan to Watch";
-
-                xml += `  <anime>\n`;
-                xml += `    <series_animedb_id>${item.id}</series_animedb_id>\n`;
-                xml += `    <series_title><![CDATA[${item.title}]]></series_title>\n`;
-                xml += `    <series_type>TV</series_type>\n`;
-                xml += `    <series_episodes>${item.episodes || 0}</series_episodes>\n`;
-                xml += `    <my_id>0</my_id>\n`;
-                xml += `    <my_watched_episodes>${item.progress || 0}</my_watched_episodes>\n`;
-                xml += `    <my_start_date>0000-00-00</my_start_date>\n`;
-                xml += `    <my_finish_date>0000-00-00</my_finish_date>\n`;
-                xml += `    <my_score>0</my_score>\n`;
-                xml += `    <my_status>${statusVal}</my_status>\n`;
-                xml += `    <my_rewatching></my_rewatching>\n`;
-                xml += `    <my_rewatching_ep>0</my_rewatching_ep>\n`;
-                xml += `    <my_last_updated>${Math.floor(Date.now() / 1000)}</my_last_updated>\n`;
-                xml += `    <my_tags><![CDATA[]]></my_tags>\n`;
-                xml += `  </anime>\n`;
-            });
-
-            xml += `</myanimelist>\n`;
-
-            const blob = new Blob([xml], { type: "text/xml" });
-            const url = URL.createObjectURL(blob);
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.href = url;
-            downloadAnchor.download = `animemax_${app.user}_mal_export_${new Date().toISOString().slice(0,10)}.xml`;
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-            URL.revokeObjectURL(url);
-            window.showToast("XML export gedownload!");
-        };
-
-        // --- SETTINGS EN FILTERS LOGICA ---
-        window.filterCloud = function(status) {
-            app.cloudFilter = status;
-            render();
-        };
-
-        window.filterXml = function(status) {
-            app.libraryFilter = status;
-            render();
-        };
-
+        // --- SAVE PROFILE SETTINGS ---
         window.saveSet = function() {
             app.user = document.getElementById('set-user').value.trim();
             app.lang = document.querySelector('input[name="lang"]:checked').value;
@@ -772,6 +729,7 @@
             render();
         };
 
+        // --- LIVE ANIME SEARCH ---
         window.liveSearch = function(e) {
             const val = e.target.value;
             if(!val) return;
@@ -792,6 +750,7 @@
             });
         };
 
+        // --- XML EN JSON WATCHLIST IMPORTEER-ENGINE ---
         window.handleXML = function() {
             const file = document.getElementById('xml-input').files[0];
             if(!file) return;
@@ -867,27 +826,7 @@
                 }
             };
             reader.readAsText(file);
-        }
-
-        // AutoPlay Fix
-        document.body.addEventListener('click', () => {
-            const ifr = document.getElementById('player');
-            if(ifr) {
-                ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"unmute"}), "*");
-                if (app.autoPlay) {
-                    ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"play"}), "*");
-                }
-            }
-        }, {once:true});
-
-        // Event Listener voor Megaplay Auto Next
-        window.addEventListener("message", e => {
-            let data = e.data;
-            if (typeof data === "string") { try { data = JSON.parse(data); } catch(err) {} }
-            if(data.event === "complete" && localStorage.getItem('amax_autonext') !== 'false') {
-                nav('watch', {id: app.id, ep: app.ep + 1});
-            }
-        });
+        };
     </script>
 </body>
 </html>
