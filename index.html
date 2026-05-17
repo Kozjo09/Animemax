@@ -75,7 +75,7 @@
 
     <!-- Hoofdinhoud -->
     <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
-        <div class="text-center py-24">
+        <div class="text-center py-24" id="main-loader">
             <i class="fa-solid fa-circle-notch animate-spin text-4xl accent mb-4"></i>
             <p class="text-xs uppercase tracking-widest text-zinc-500 animate-pulse">Laden en cloud-database verbinden...</p>
         </div>
@@ -116,6 +116,7 @@
 
         // Cache voor MyAnimeList metadata om herhaaldelijk inladen te voorkomen
         let malCache = {};
+        let mediaCache = {};
 
         // Statische Trending Now Back-uplijst (Laadt ALTIJD direct, 100% rate-limit-proof)
         const STATIC_TRENDING = [
@@ -254,6 +255,10 @@
                                 <input type="email" id="auth-email" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="voorbeeld@gmail.com">
                             </div>
                             <div>
+                                <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
+                                <input type="text" id="auth-username" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="Gebruikersnaam">
+                            </div>
+                            <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Wachtwoord</label>
                                 <input type="password" id="auth-password" class="w-full bg-zinc-900 border border-white/5 p-4 rounded-xl outline-none focus:border-accent text-white font-bold" placeholder="Wachtwoord (min. 6 tekens)">
                             </div>
@@ -320,17 +325,18 @@
         }
 
         async function handleAuth(type) {
+            const uInput = document.getElementById('auth-username') ? document.getElementById('auth-username').value.trim() : "";
             const p = document.getElementById('auth-password').value.trim();
 
             if (type === 'reg') {
                 const email = document.getElementById('auth-email').value.trim();
-                if (!email || !p) return window.showToast("Vul alle velden in!", "error");
+                if (!email || !uInput || !p) return window.showToast("Vul alle velden in!", "error");
                 if (p.length < 6) {
                     window.showToast("Wachtwoord moet minimaal 6 tekens bevatten!", "error");
                     return;
                 }
                 
-                app.user = email.split('@')[0];
+                app.user = uInput;
 
                 const { data, error } = await sb.auth.signUp({ email, password: p });
                 if (error) {
@@ -338,6 +344,11 @@
                     return;
                 }
                 
+                if (data.user) {
+                    await sb.from('anime_users').insert([{
+                        id: data.user.id, username: uInput, watchlist: [], recent: []
+                    }]);
+                }
                 window.showToast("Account succesvol aangemaakt! Je kunt nu direct inloggen.");
                 showLoginPage('login');
             } else {
@@ -416,7 +427,7 @@
 
         async function saveCloudData() {
             if (!sessionData) return;
-            const { error } = await sb.from('anime_users').update({
+            const { error = null } = await sb.from('anime_users').update({
                 watchlist: app.xmlLib,
                 recent: app.recent,
                 settings: {
@@ -726,11 +737,37 @@
             }
         };
 
+        // --- VERDER KIJKEN VERWIJDER LOGICA MET EVENT PROMOTION BLOKKERING ---
+        window.removeRecentAnime = function(event, id) {
+            // Voorkom bubble-routing naar de achtergrond container
+            if (event) {
+                event.stopPropagation();
+                event.preventDefault();
+            }
+            
+            window.showConfirm(
+                "Geschiedenis Verwijderen",
+                "Weet je zeker dat je deze anime wilt verwijderen uit je Verder Kijken geschiedenis?",
+                () => {
+                    app.recent = app.recent.filter(r => r && r.id != id);
+                    saveCloudDataDebounced();
+                    window.showToast("Verwijderd uit geschiedenis!");
+                    render();
+                }
+            );
+        };
+
         function render() {
             if (!sessionData) return showLoginPage('login');
             const main = document.getElementById('content');
             if(!main) return;
             
+            // Verberg de laad-indicator bij renderen
+            const loader = document.getElementById('main-loader');
+            if (loader) {
+                loader.style.display = 'none';
+            }
+
             // Sync bottom-nav buttons
             document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('accent'));
             document.querySelectorAll('.nav-link').forEach(el => el.classList.add('text-zinc-600'));
@@ -743,7 +780,9 @@
 
             try {
                 if (app.view === 'watch') {
-                    const localAnime = app.xmlLib.find(item => item.id.toString() == app.id.toString()) || app.recent.find(item => item.id.toString() == app.id.toString());
+                    // VOORKOM CRASHES: Voeg expliciet element- en ID-controles toe voor de database elementen!
+                    const localAnime = app.xmlLib.find(item => item && item.id && item.id.toString() == app.id.toString()) || 
+                                       app.recent.find(item => item && item.id && item.id.toString() == app.id.toString());
                     const localTitle = localAnime ? localAnime.title : "Laden...";
                     const localTotalEpisodes = localAnime ? (localAnime.episodes || 12) : 12;
                     const userProgress = localAnime ? parseInt(localAnime.progress || 0) : 0;
@@ -811,10 +850,11 @@
                     for (let i = 1; i <= localTotalEpisodes; i++) {
                         let btnClass = (i == app.ep) ? "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20" : "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
                         if (i <= userProgress && i != app.ep) btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
-                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
+                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:'${app.id}', ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
                     }
 
-                    const activeRecent = app.recent.find(r => r.id == app.id && r.ep == app.ep);
+                    // VOORKOM CRASHES: Beveilig de find op activeRecent zodat eventueel ontbrekende of null-rijen geen javascript crash geven!
+                    const activeRecent = app.recent.find(r => r && r.id && r.id.toString() == app.id.toString() && r.ep == app.ep);
                     if (activeRecent && activeRecent.time > 0) {
                         currentPlaybackTime = activeRecent.time;
                         currentDuration = activeRecent.duration || 0;
@@ -882,7 +922,7 @@
                                 }
 
                                 grid.innerHTML += `
-                                    <button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:${app.id}, ep:${i}})" 
+                                    <button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:'${app.id}', ep:${i}})" 
                                         ${disabledAttr} 
                                         class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">
                                         ${i}
@@ -895,7 +935,7 @@
                             m.relations.edges.filter(e => e.node.type === 'ANIME').forEach(e => {
                                 const rTitle = app.lang === 'english' ? (e.node.title.english || e.node.title.romaji) : e.node.title.romaji;
                                 relGrid.innerHTML += `
-                                    <button onclick="nav('watch', {id:${e.node.id}})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
+                                    <button onclick="nav('watch', {id:'${e.node.id}'})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
                                         <div class="truncate pr-4">
                                             <p class="truncate text-white">${rTitle}</p>
                                             <p class="text-[7px] text-zinc-600 mt-0.5">${e.relationType.replace(/_/g, ' ')}</p>
@@ -926,12 +966,16 @@
                     }
 
                     app.recent.forEach(r => {
+                        // VOORKOM CRASHES: Controleer op eventuele null of lege items in history
+                        if (!r) return;
+                        
                         const hasProgress = r.time > 0 && r.duration > 0;
                         const percent = hasProgress ? Math.round((r.time / r.duration) * 100) : 0;
                         const remaining = hasProgress ? formatDuration(r.duration - r.time) : '';
 
+                        // EXACT HERSTELD: ID is veilig ingepakt in quotes zodat navigatie en de confirm-dialoog altijd werken!
                         grid.innerHTML += `
-                            <div onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="group text-left animate-fade-in relative cursor-pointer">
+                            <div onclick="nav('watch', {id:'${r.id}', ep:${r.ep}})" class="group text-left animate-fade-in relative cursor-pointer">
                                 <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2 shadow-lg animate-fade-in">
                                     <img src="${r.img || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=300'}" class="w-full h-full object-cover opacity-45 group-hover:scale-105 transition-transform duration-500">
                                     
@@ -950,7 +994,7 @@
                                 </div>
                                 <p class="text-[9px] font-black uppercase truncate text-zinc-400 group-hover:text-white transition-colors pl-1">${r.title}</p>
                                 
-                                <button onclick="removeRecentAnime(event, ${r.id})" class="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-red-600/90 text-white flex items-center justify-center border border-black shadow-lg transition-all active:scale-75 z-50 hover:bg-red-500">
+                                <button onclick="event.stopPropagation(); event.preventDefault(); removeRecentAnime(event, '${r.id}')" class="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-red-600/90 text-white flex items-center justify-center border border-black shadow-lg transition-all active:scale-75 z-50 hover:bg-red-500">
                                     <i class="fa-solid fa-xmark text-[10px] font-black"></i>
                                 </button>
                             </div>
@@ -1091,7 +1135,7 @@
                     
                     STATIC_TRENDING.forEach(m => {
                         grid.innerHTML += `
-                            <button onclick="nav('watch', {id:${m.id}})" class="text-left group animate-fade-in">
+                            <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
                                 <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
                                     <img src="${m.img}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
                                 </div>
@@ -1105,8 +1149,9 @@
                             grid.innerHTML = ''; 
                             res.data.Page.media.forEach(m => {
                                 const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                                // EXACT HERSTELD: ID ingepakt in single-quotes! Dit voorkomt fouten bij navigatie vanaf homepagina!
                                 grid.innerHTML += `
-                                    <button onclick="nav('watch', {id:${m.id}})" class="text-left group animate-fade-in">
+                                    <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
                                         <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
                                             <img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
                                         </div>
@@ -1157,10 +1202,10 @@
                         </div>
                         
                         <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
-                            <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-bold transition-colors flex items-center gap-1.5"><i class="fa-solid fa-play text-[10px]"></i> Watch</button>
-                            <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-black">+1 Ep</button>
-                            <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-3 rounded-xl text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
-                            <button onclick="window.deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-3 rounded-xl text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
+                            <button onclick="nav('watch', {id:'${item.id}', ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-bold transition-colors flex items-center gap-1.5"><i class="fa-solid fa-play text-[10px]"></i> Watch</button>
+                            <button onclick="quickIncrement('${item.id}')" class="bg-[#1a1a1a] hover:bg-zinc-800 px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-black">+1 Ep</button>
+                            <button onclick="changeLocalFolderPrompt('${item.id}')" class="bg-[#1a1a1a] hover:bg-zinc-800 p-3 rounded-xl text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
+                            <button onclick="window.deleteLocalItem('${item.id}')" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-3 rounded-xl text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>
                 `;
@@ -1294,7 +1339,7 @@
                 res.data.Page.media.forEach(m => {
                     const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
                     grid.innerHTML += `
-                        <button onclick="nav('watch', {id:${m.id}})" class="text-left group animate-toast">
+                        <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-toast">
                             <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
                                 <img src="${m.coverImage.large}" class="w-full h-full object-cover">
                             </div>
@@ -1517,7 +1562,7 @@
             if(eventType === "complete" && app.autoNext) {
                 saveCurrentVideoTime();
                 const nextEp = app.ep + 1;
-                const localItem = app.xmlLib.find(item => item.id == app.id);
+                const localItem = app.xmlLib.find(item => item && item.id && item.id.toString() == app.id.toString());
                 if (localItem) {
                     window.autoUpdateProgressOnEpClick(app.id, localItem.title, nextEp, localItem.episodes || 12, localItem.coverImage || '');
                 }
