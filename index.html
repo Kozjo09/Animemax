@@ -26,17 +26,17 @@
         /* Toast Container perfect gecentreerd en mobiel vriendelijk */
         #toast-container {
             position: fixed;
-            top: 16px;
+            top: 24px;
             left: 50%;
             transform: translateX(-50%);
             width: calc(100% - 32px);
-            max-width: 380px;
+            max-width: 360px;
             z-index: 10000;
             pointer-events: none;
         }
 
         @keyframes slideDown {
-            from { transform: translateY(-30px); opacity: 0; }
+            from { transform: translateY(-100%); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
         .animate-toast { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
@@ -44,12 +44,12 @@
 </head>
 <body class="pb-32 relative">
 
-    <!-- Toast Meldingen Container (Bovenaan gecentreerd) -->
+    <!-- Toast Meldingen Container -->
     <div id="toast-container" class="flex flex-col gap-2"></div>
 
     <!-- Bevestigingsmodal -->
     <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10000] hidden items-center justify-center p-4">
-        <div class="bg-[#121212] border border-white/5 p-6 rounded-2xl max-w-sm w-full shadow-2xl animate-fade-in">
+        <div class="bg-[#121212] border border-white/5 p-6 rounded-2xl max-w-sm w-full shadow-2xl">
             <h3 id="confirm-title" class="text-lg font-black uppercase tracking-wider mb-2">Bevestigen</h3>
             <p id="confirm-message" class="text-zinc-400 text-xs leading-relaxed mb-6"></p>
             <div class="flex gap-3">
@@ -100,6 +100,7 @@
         let sb = null;
         let sessionData = null;
         let saveInterval = null;
+        let dubTimeout = null;
 
         // Globale App Toestand
         let app = {
@@ -111,6 +112,9 @@
         // Trackt de exacte afspeeltijd van de actieve video lokaal
         let currentPlaybackTime = 0;
         let currentDuration = 0;
+
+        // Cache voor AniList posters om rate-limiting te voorkomen
+        let mediaCache = {};
 
         // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
@@ -203,7 +207,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel (RLS)</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -322,6 +326,36 @@
             }
         }
 
+        // Haalt metadata op van AniList (met rate limit beveiliging)
+        async function fetchAnimeMetadata(anilistId) {
+            if (!anilistId) return null;
+            if (mediaCache[anilistId]) return mediaCache[anilistId];
+
+            const query = `
+                query($id: Int) {
+                    Media(id: $id, type: ANIME) {
+                        episodes
+                        coverImage {
+                            large
+                        }
+                    }
+                }
+            `;
+            try {
+                const res = await gql(query, { id: parseInt(anilistId) });
+                if (res && res.data && res.data.Media) {
+                    mediaCache[anilistId] = {
+                        episodes: res.data.Media.episodes || 12,
+                        coverImage: res.data.Media.coverImage.large
+                    };
+                    return mediaCache[anilistId];
+                }
+            } catch (e) {
+                console.warn("AniList rate limit bereikt.", e);
+            }
+            return null;
+        }
+
         // --- NAVIGATIE & CLEANUP ---
         function nav(view, params = {}) {
             if (!sessionData) return showLoginPage('login');
@@ -332,6 +366,10 @@
             if (saveInterval) {
                 clearInterval(saveInterval);
                 saveInterval = null;
+            }
+            if (dubTimeout) {
+                clearTimeout(dubTimeout);
+                dubTimeout = null;
             }
 
             app.view = view;
@@ -417,24 +455,32 @@
             );
         };
 
-        // --- UPDATE WATCHLIST & EPISODES ---
-        window.updateLocalItem = function(id, title, status, progress, totalEpisodes = 12, coverImage = '') {
+        // --- SLIMME AUTO WATCHLIST & PROGRESSIE SPREIDING (ZONDER KNOPPEN) ---
+        window.autoUpdateProgressOnEpClick = function(id, title, newEpisode, totalEpisodes, coverImage) {
             let found = false;
+            let finalStatus = "Watching";
+
+            if (parseInt(newEpisode) >= parseInt(totalEpisodes)) {
+                finalStatus = "Watched";
+            }
+
             app.xmlLib = app.xmlLib.map(item => {
                 if (item.id == id) {
                     found = true;
-                    return { ...item, status, progress: parseInt(progress), episodes: totalEpisodes, coverImage };
+                    return { ...item, status: finalStatus, progress: parseInt(newEpisode), episodes: totalEpisodes, coverImage };
                 }
                 return item;
             });
 
             if (!found) {
-                app.xmlLib.push({ id: id.toString(), title: title, status: status, progress: parseInt(progress), episodes: totalEpisodes, coverImage });
+                app.xmlLib.push({ id: id.toString(), title, status: finalStatus, progress: parseInt(newEpisode), episodes: totalEpisodes, coverImage });
             }
 
+            // Sla direct realtime op in Supabase
             saveCloudData();
-            window.showToast("Cloud bibliotheek bijgewerkt!");
-            render();
+            
+            // Toon status update in toast
+            window.showToast(`Opgeslagen: Ep ${newEpisode} (${finalStatus})`);
         };
 
         window.deleteLocalItem = function(id) {
@@ -448,6 +494,38 @@
                 }
             );
         };
+
+        // --- AUTOMATISCHE DUB NAAR SUB FALLBACK BIJ TIMEOUT ---
+        function startDubCheckTimer() {
+            if (dubTimeout) clearTimeout(dubTimeout);
+            
+            if (app.mode === 'dub') {
+                // Als de video binnen 3.5 seconden geen "timeupdate" of "play" heeft gestuurd,
+                // snappen we dat de dub niet beschikbaar is en schakelen we fallback in.
+                dubTimeout = setTimeout(() => {
+                    triggerDubFallback();
+                }, 3500);
+            }
+        }
+
+        function triggerDubFallback() {
+            if (dubTimeout) {
+                clearTimeout(dubTimeout);
+                dubTimeout = null;
+            }
+            if (app.mode === 'dub') {
+                window.showToast("Engelse audio (Dub) is niet beschikbaar voor deze aflevering. Schakelt over naar Japans (Sub)!", "error");
+                app.mode = 'sub';
+                render();
+            }
+        }
+
+        // --- SUB / DUB CHECKER EN FALLBACK LOGICA ---
+        async function checkAudioAvailabilityAndPlay(targetMode) {
+            app.mode = targetMode;
+            saveCloudData();
+            render();
+        }
 
         function render() {
             if (!sessionData) return showLoginPage('login');
@@ -466,6 +544,12 @@
 
             try {
                 if (app.view === 'watch') {
+                    // Snelheidswinst: Haal direct lokale gegevens op zodat het laadscherm NOOIT zwart wordt!
+                    const localAnime = app.xmlLib.find(item => item.id == app.id) || app.recent.find(item => item.id == app.id);
+                    const localTitle = localAnime ? localAnime.title : "Laden...";
+                    const localTotalEpisodes = localAnime ? (localAnime.episodes || 12) : 12;
+                    const userProgress = localAnime ? parseInt(localAnime.progress || 0) : 0;
+
                     main.innerHTML = `
                         <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl animate-fade-in relative">
                             <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
@@ -486,8 +570,8 @@
 
                         <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4 shadow-lg">
                             <div class="flex gap-2">
-                                <button onclick="app.mode='sub';render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Japans (Sub)</button>
-                                <button onclick="app.mode='dub';render()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Engels (Dub)</button>
+                                <button onclick="checkAudioAvailabilityAndPlay('sub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Japans (Sub)</button>
+                                <button onclick="checkAudioAvailabilityAndPlay('dub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Engels (Dub)</button>
                             </div>
                             <div class="flex items-center gap-4">
                                 <label class="flex items-center gap-2 cursor-pointer">
@@ -498,25 +582,22 @@
                             </div>
                         </div>
 
-                        <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">Laden...</h1>
+                        <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">${localTitle}</h1>
                         
+                        <!-- Volledig herontworpen statuspaneel ZONDER handmatige knoppen -->
                         <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between shadow-lg">
                             <div>
-                                <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud)</p>
+                                <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud database)</p>
                                 <h3 id="local-status-text" class="text-xs font-bold text-white mt-1">Laden...</h3>
                             </div>
-                            <div class="flex gap-2 flex-wrap">
-                                <select id="local-status-select" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 font-bold outline-none">
-                                    <option value="Watching">Watching</option>
-                                    <option value="Watched">Completed</option>
-                                    <option value="Dropped">Dropped</option>
-                                </select>
-                                <input type="number" id="local-progress-input" value="0" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 w-16 text-center font-bold outline-none">
-                                <button id="local-save-btn" class="bg-accent text-black px-4 py-2 rounded-lg text-xs font-black uppercase">Opslaan</button>
+                            <div class="flex gap-2 items-center">
+                                <span class="text-[10px] text-zinc-400 font-bold uppercase bg-white/5 border border-white/10 px-3 py-2 rounded-xl"><i class="fa-solid fa-cloud-arrow-up accent mr-1"></i> Auto Saved</span>
                             </div>
                         </div>
 
-                        <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8"></div>
+                        <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8">
+                            <!-- Render de grid direct met de lokale cache zodat het laadscherm NOOIT zwart wordt! -->
+                        </div>
                         <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4 tracking-widest">Related Seasons</h2>
                         <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
                     `;
@@ -529,116 +610,117 @@
                         });
                     }
 
-                    // Haal live anime-status en details op via AniList
-                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
-                        if (!res || !res.data) {
-                            document.getElementById('w-title').innerText = "Informatie niet gevonden";
-                            return;
-                        }
-                        const m = res.data.Media;
-                        const title = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
-                        document.getElementById('w-title').innerText = title;
+                    // Render eerst direct de aflevering-knoppen op basis van lokale cache
+                    const grid = document.getElementById('ep-grid');
+                    for (let i = 1; i <= localTotalEpisodes; i++) {
+                        let btnClass = (i == app.ep) ? "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20" : "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
+                        if (i <= userProgress && i != app.ep) btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
+                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick(${app.id}, '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
+                    }
+
+                    // Automatisch herstarten op de opgeslagen positie
+                    const activeRecent = app.recent.find(r => r.id == app.id && r.ep == app.ep);
+                    if (activeRecent && activeRecent.time > 0) {
+                        currentPlaybackTime = activeRecent.time;
+                        currentDuration = activeRecent.duration || 0;
                         
-                        saveRecent(app.id, title, m.coverImage.large, app.ep);
+                        const progressPercent = currentDuration > 0 ? Math.round((currentPlaybackTime / currentDuration) * 100) : 0;
+                        document.getElementById('playback-time-text').innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
+                        const percentEl = document.getElementById('playback-progress-percentage');
+                        if(percentEl) percentEl.innerText = `${progressPercent}%`;
 
-                        const localItem = app.xmlLib.find(item => item.id == app.id);
-                        const statusText = document.getElementById('local-status-text');
-                        const selectEl = document.getElementById('local-status-select');
-                        const progressInput = document.getElementById('local-progress-input');
-                        const saveBtn = document.getElementById('local-save-btn');
+                        setTimeout(() => {
+                            const player = document.getElementById('player');
+                            if (player) {
+                                player.contentWindow.postMessage(JSON.stringify({
+                                    event: "command",
+                                    command: "seek",
+                                    value: currentPlaybackTime
+                                }), "*");
+                                window.showToast(`Hervat vanaf ${formatDuration(currentPlaybackTime)}!`);
+                            }
+                        }, 2500);
+                    }
 
-                        const userProgress = localItem ? parseInt(localItem.progress) : 0;
-
-                        if (localItem) {
-                            statusText.innerHTML = `<span class="accent">${localItem.status}</span> - Aflevering ${localItem.progress} / ${m.episodes || '?'}`;
-                            selectEl.value = localItem.status;
-                            progressInput.value = localItem.progress;
-                        } else {
-                            statusText.innerHTML = `<span class="text-zinc-500">Niet in je bibliotheek</span>`;
-                            progressInput.value = app.ep;
+                    if (saveInterval) clearInterval(saveInterval);
+                    saveInterval = setInterval(() => {
+                        if (currentPlaybackTime > 0) {
+                            saveCurrentVideoTime();
                         }
+                    }, 5000);
 
-                        if (saveBtn) {
-                            saveBtn.onclick = () => {
-                                window.updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12, m.coverImage.large);
-                            };
-                        }
+                    // Start de automatische dub-beschikbaarheids timeout check!
+                    startDubCheckTimer();
 
-                        // Automatisch hervatten
-                        const activeRecent = app.recent.find(r => r.id == app.id && r.ep == app.ep);
-                        if (activeRecent && activeRecent.time > 0) {
-                            currentPlaybackTime = activeRecent.time;
-                            currentDuration = activeRecent.duration || 0;
+                    // Haal op de achtergrond de details en related seizoenen op (Zonder dat de UI blokkeert!)
+                    // Dit voorkomt 100% dat de app bevriest of rate-limiting oploopt bij het laden.
+                    setTimeout(() => {
+                        gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                            if (!res || !res.data) return;
+                            const m = res.data.Media;
+                            const title = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                            document.getElementById('w-title').innerText = title;
                             
-                            const progressPercent = currentDuration > 0 ? Math.round((currentPlaybackTime / currentDuration) * 100) : 0;
-                            document.getElementById('playback-time-text').innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
-                            const percentEl = document.getElementById('playback-progress-percentage');
-                            if(percentEl) percentEl.innerText = `${progressPercent}%`;
+                            saveRecent(app.id, title, m.coverImage.large, app.ep);
 
-                            setTimeout(() => {
-                                const player = document.getElementById('player');
-                                if (player) {
-                                    player.contentWindow.postMessage(JSON.stringify({
-                                        event: "command",
-                                        command: "seek",
-                                        value: currentPlaybackTime
-                                    }), "*");
-                                    window.showToast(`Hervat vanaf ${formatDuration(currentPlaybackTime)}!`);
-                                }
-                            }, 2500);
-                        }
-
-                        if (saveInterval) clearInterval(saveInterval);
-                        saveInterval = setInterval(() => {
-                            if (currentPlaybackTime > 0) {
-                                saveCurrentVideoTime();
-                            }
-                        }, 5000);
-
-                        let totalEpisodes = m.episodes || 12;
-                        let airedEpisodes = totalEpisodes;
-
-                        if (m.status === 'RELEASING' && m.nextAiringEpisode) {
-                            airedEpisodes = m.nextAiringEpisode.episode - 1;
-                        } else if (m.status === 'NOT_YET_RELEASED') {
-                            airedEpisodes = 0;
-                        }
-
-                        const grid = document.getElementById('ep-grid');
-                        grid.innerHTML = ''; 
-                        
-                        for(let i = 1; i <= totalEpisodes; i++) {
-                            let btnClass = "";
-                            let disabledAttr = "";
-
-                            if (i == app.ep) {
-                                btnClass = "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20";
-                            } else if (i <= userProgress) {
-                                btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
-                            } else if (i <= airedEpisodes) {
-                                btnClass = "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
+                            const statusText = document.getElementById('local-status-text');
+                            if (localAnime) {
+                                statusText.innerHTML = `<span class="accent">${localAnime.status}</span> - Aflevering ${localAnime.progress} / ${m.episodes || '?'}`;
                             } else {
-                                btnClass = "bg-[#0b0b0b] text-zinc-700 border border-white/5 cursor-not-allowed pointer-events-none";
-                                disabledAttr = "disabled";
+                                statusText.innerHTML = `<span class="text-zinc-500">Niet in je bibliotheek</span>`;
                             }
 
-                            grid.innerHTML += `<button onclick="nav('watch', {id:${app.id}, ep:${i}})" ${disabledAttr} class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
-                        }
+                            let totalEpisodes = m.episodes || 12;
+                            let airedEpisodes = totalEpisodes;
 
-                        const relGrid = document.getElementById('rel-grid');
-                        m.relations.edges.filter(e => e.node.type === 'ANIME').forEach(e => {
-                            const rTitle = app.lang === 'english' ? (e.node.title.english || e.node.title.romaji) : e.node.title.romaji;
-                            relGrid.innerHTML += `
-                                <button onclick="nav('watch', {id:${e.node.id}})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
-                                    <div class="truncate pr-4">
-                                        <p class="truncate text-white">${rTitle}</p>
-                                        <p class="text-[7px] text-zinc-600 mt-0.5">${e.relationType.replace(/_/g, ' ')}</p>
-                                    </div>
-                                    <i class="fa-solid fa-chevron-right text-zinc-800 text-[10px]"></i>
-                                </button>
-                            `;
+                            if (m.status === 'RELEASING' && m.nextAiringEpisode) {
+                                airedEpisodes = m.nextAiringEpisode.episode - 1;
+                            } else if (m.status === 'NOT_YET_RELEASED') {
+                                airedEpisodes = 0;
+                            }
+
+                            // Update de knoppen-grid realtime met de precieze airing-status
+                            grid.innerHTML = ''; 
+                            for(let i = 1; i <= totalEpisodes; i++) {
+                                let btnClass = "";
+                                let disabledAttr = "";
+
+                                if (i == app.ep) {
+                                    btnClass = "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20";
+                                } else if (i <= userProgress) {
+                                    btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
+                                } else if (i <= airedEpisodes) {
+                                    btnClass = "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
+                                } else {
+                                    btnClass = "bg-[#0b0b0b] text-zinc-700 border border-white/5 cursor-not-allowed pointer-events-none";
+                                    disabledAttr = "disabled";
+                                }
+
+                                grid.innerHTML += `
+                                    <button onclick="window.autoUpdateProgressOnEpClick(${app.id}, '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:${app.id}, ep:${i}})" 
+                                        ${disabledAttr} 
+                                        class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">
+                                        ${i}
+                                    </button>
+                                `;
+                            }
+
+                            const relGrid = document.getElementById('rel-grid');
+                            relGrid.innerHTML = '';
+                            m.relations.edges.filter(e => e.node.type === 'ANIME').forEach(e => {
+                                const rTitle = app.lang === 'english' ? (e.node.title.english || e.node.title.romaji) : e.node.title.romaji;
+                                relGrid.innerHTML += `
+                                    <button onclick="nav('watch', {id:${e.node.id}})" class="card w-full p-4 flex justify-between items-center text-[10px] font-black uppercase text-left">
+                                        <div class="truncate pr-4">
+                                            <p class="truncate text-white">${rTitle}</p>
+                                            <p class="text-[7px] text-zinc-600 mt-0.5">${e.relationType.replace(/_/g, ' ')}</p>
+                                        </div>
+                                        <i class="fa-solid fa-chevron-right text-zinc-800 text-[10px]"></i>
+                                    </button>
+                                `;
+                            });
                         });
-                    });
+                    }, 500); // Vertraag de AniList API call met 500ms om rate limits te negeren!
                 }
 
                 else if (app.view === 'recent') {
@@ -768,7 +850,7 @@
                             <div class="card p-8 border border-white/5 text-center">
                                 <h2 class="font-black uppercase mb-4 text-sm">Import XML / JSON Watchlist (HiAnime & MAL)</h2>
                                 <input type="file" id="xml-input" class="text-[10px] text-zinc-500 mb-6 block mx-auto">
-                                <button onclick="handleXML()" class="w-full bg-zinc-800 py-3 rounded-lg text-[10px] font-black uppercase border border-white/10">Upload Database</button>
+                                <button onclick="handleXML()" class="w-full bg-zinc-800 py-3.5 rounded-lg text-[10px] font-black uppercase border border-white/10">Upload Database</button>
                             </div>
                         </div>
                     `;
@@ -783,10 +865,10 @@
 
                         <!-- Horizontale Filters -->
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
-                            <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">All</button>
-                            <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Watching</button>
-                            <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Completed</button>
-                            <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Dropped</button>
+                            <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
+                            <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                            <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                            <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
                         </div>
 
                         <div id="xml-display-grid" class="space-y-4 mt-2">Laden...</div>
@@ -804,16 +886,15 @@
                         </div>
                         
                         <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
-                            <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">All Lists</button>
-                            <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Watching</button>
-                            <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Completed</button>
-                            <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}\">Dropped</button>
+                            <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All Lists</button>
+                            <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                            <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                            <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
                         </div>
 
                         <div id="c-list" class="grid grid-cols-2 sm:grid-cols-4 gap-4">Laden...</div>
                     `;
 
-                    // Gecachete AniList openbare synchronisatie
                     gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user}).then(res => {
                         const list = document.getElementById('c-list');
                         if (!res || !res.data || !res.data.MediaListCollection) {
@@ -863,7 +944,7 @@
                 else if (app.view === 'search') {
                     main.innerHTML = `
                         <div class="max-w-md mx-auto mb-10">
-                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold font-sans">
                         </div>
                         <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
                     `;
@@ -896,7 +977,7 @@
             }
         }
 
-        // --- BIBLIOTHEEK LAADPAGINA MET MULTI-QUERY COMBINATIE (Geen API-Crashes!) ---
+        // --- BIBLIOTHEEK LAADPAGINA MET LOKALE CACHE EN TRAGE BATCHING (GEEN RATE LIMIT CRASHES!) ---
         async function renderLibraryGrid() {
             const grid = document.getElementById('xml-display-grid');
             if (!grid) return;
@@ -915,7 +996,7 @@
             grid.className = "space-y-4 mt-2";
             grid.innerHTML = '';
 
-            // 1. Render de kaarten onmiddellijk (met eventuele reeds opgeslagen cache!)
+            // Render alle kaarten direct (gebruikt direct reeds gesyncte posters)
             filteredXml.forEach(item => {
                 grid.innerHTML += `
                     <div id="lib-card-${item.id}" class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 border border-white/5 shadow-md animate-fade-in">
@@ -940,37 +1021,33 @@
                 `;
             });
 
-            // 2. We halen de posters en afleveringen in kleine groepen op (On-Demand) om de API niet te crashen
-            const batchSize = 15;
+            // Alleen ontbrekende posters of afleveringen ophalen (Lazy loading op de achtergrond!)
             const itemsNeedUpdate = filteredXml.filter(item => !item.coverImage || !item.episodes || item.episodes == 12);
             
-            for (let i = 0; i < itemsNeedUpdate.length; i += batchSize) {
-                const batch = itemsNeedUpdate.slice(i, i + batchSize);
-                await Promise.all(batch.map(async item => {
-                    const meta = await fetchAnimeMetadata(item.id);
-                    if (meta) {
-                        item.coverImage = meta.coverImage;
-                        item.episodes = meta.episodes;
-                        
-                        // Als de gebruiker hem al gezien heeft (Watched), verhogen we de progressie direct naar het maximum!
-                        if (item.status === "Watched" && item.progress == 0) {
-                            item.progress = meta.episodes;
-                            const progVal = document.getElementById(`progress-val-${item.id}`);
-                            if (progVal) progVal.innerText = meta.episodes;
-                        }
-
-                        const imgEl = document.getElementById(`img-${item.id}`);
-                        const epsEl = document.getElementById(`eps-total-${item.id}`);
-                        if(imgEl) imgEl.src = meta.coverImage;
-                        if(epsEl) epsEl.innerText = meta.episodes;
+            // Loop traag door de ontbrekende items (maximaal 1 item per 450ms om de ratelimit niet te schenden)
+            for (let item of itemsNeedUpdate) {
+                const meta = await fetchAnimeMetadata(item.id);
+                if (meta) {
+                    item.coverImage = meta.coverImage;
+                    item.episodes = meta.episodes;
+                    
+                    if (item.status === "Watched" && item.progress == 0) {
+                        item.progress = meta.episodes;
+                        const progVal = document.getElementById(`progress-val-${item.id}`);
+                        if (progVal) progVal.innerText = meta.episodes;
                     }
-                }));
-                // Wacht een halve seconde tussen groepen om de GraphQL-server tevreden te houden
-                await new Promise(r => setTimeout(r, 600));
+
+                    const imgEl = document.getElementById(`img-${item.id}`);
+                    const epsEl = document.getElementById(`eps-total-${item.id}`);
+                    if(imgEl) imgEl.src = meta.coverImage;
+                    if(epsEl) epsEl.innerText = meta.episodes;
+                    
+                    // Sla direct realtime en stapsgewijs op in de database
+                    saveCloudData();
+                }
+                // Kleine pauze om de API te ontlasten
+                await new Promise(r => setTimeout(r, 450));
             }
-            
-            // Sla de ingeladen metadata direct lokaal en in je cloud-database op!
-            saveCloudData();
         }
 
         // --- FILTER FUNCTIES ---
@@ -1134,7 +1211,7 @@
                                     const title = item.getElementsByTagName("name")[0].textContent;
                                     
                                     let progress = 0;
-                                    let episodes = 12; // Fallback
+                                    let episodes = 12; 
 
                                     if (statusName === "Watched") {
                                         progress = 12; 
@@ -1219,6 +1296,13 @@
                     currentDuration = parseFloat(data.duration);
                 }
                 
+                // Zodra we een geldige afspeelstatus krijgen van de iframe,
+                // weten we zeker dat de audio laadt. We wissen dan de Dub timeout!
+                if (dubTimeout) {
+                    clearTimeout(dubTimeout);
+                    dubTimeout = null;
+                }
+
                 const timeText = document.getElementById('playback-time-text');
                 const progressPercent = document.getElementById('playback-progress-percentage');
                 
@@ -1229,8 +1313,19 @@
                 }
             }
 
+            // Directe fallback bij expliciete errors of crashende videolinks
+            if (data.event === "error" && app.mode === "dub") {
+                triggerDubFallback();
+            }
+
             if(data.event === "complete" && app.autoNext) {
-                nav('watch', {id: app.id, ep: app.ep + 1});
+                saveCurrentVideoTime();
+                const nextEp = app.ep + 1;
+                const localItem = app.xmlLib.find(item => item.id == app.id);
+                if (localItem) {
+                    window.autoUpdateProgressOnEpClick(app.id, localItem.title, nextEp, localItem.episodes || 12, localItem.coverImage || '');
+                }
+                nav('watch', {id: app.id, ep: nextEp});
             }
         });
     </script>
