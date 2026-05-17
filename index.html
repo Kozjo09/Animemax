@@ -63,7 +63,7 @@
             
             // Instellingen (HiAnime Stijl)
             user: localStorage.getItem('amax_user') || '',
-            clientId: localStorage.getItem('amax_client') || '21074', 
+            clientId: localStorage.getItem('amax_client') || '', // Het AniList Client ID invoervakje
             showContinue: localStorage.getItem('amax_show_continue') !== 'false',
             lang: localStorage.getItem('amax_lang') || 'english',
             autoSelect: localStorage.getItem('amax_auto_select') || 'sub',
@@ -74,7 +74,11 @@
             
             token: localStorage.getItem('al_token') || '',
             recent: JSON.parse(localStorage.getItem('amax_recent') || '[]'),
-            xmlLib: JSON.parse(localStorage.getItem('amax_xml') || '[]')
+            xmlLib: JSON.parse(localStorage.getItem('amax_xml') || '[]'),
+            
+            // Actieve filter states
+            cloudFilter: 'All',
+            libraryFilter: 'All'
         };
 
         // --- AUTOMATISCHE REDIRECT DETECTIE ---
@@ -259,9 +263,10 @@
                                     <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs">
                                 </div>
 
+                                <!-- GEVRAAGDE CLIENT ID VAK VOOR ANILIST -->
                                 <div class="p-2 border-t border-white/5 pt-4">
-                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Client ID</label>
-                                    <input type="text" id="set-client" value="${app.clientId}" placeholder="Enter Client ID" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
+                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1 accent">AniList Client ID</label>
+                                    <input type="text" id="set-client" value="${app.clientId}" placeholder="Enter Client ID (e.g. 21543)" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
                                 </div>
 
                                 <div class="p-2">
@@ -291,53 +296,104 @@
             }
 
             else if (app.view === 'library') {
-                main.innerHTML = `<h2 class="text-xl font-black accent uppercase italic mb-6">Local Library</h2><div class="space-y-3">`;
-                if(!app.xmlLib.length) main.innerHTML += `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen XML data gevonden. Importeer deze bij Profiel.</p>`;
-                
-                let grouped = {'Watching': [], 'Watched': [], 'Dropped': []};
-                app.xmlLib.forEach(item => {
-                    const status = item.status || 'Watching';
-                    if (!grouped[status]) grouped[status] = [];
-                    grouped[status].push(item);
-                });
+                // --- XML LIST MET FILTERS NAAST ELKAAR ---
+                main.innerHTML = `
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-black accent uppercase italic">Local Library</h2>
+                        ${app.xmlLib.length ? `<button onclick="syncAllXmlToAniList()" class="bg-[#121212] hover:bg-accent hover:text-black border border-accent/25 text-accent text-[9px] font-black px-3 py-1.5 rounded-lg uppercase transition-all"><i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Sync Library to Cloud</button>` : ''}
+                    </div>
 
-                Object.keys(grouped).forEach(folder => {
-                    if (grouped[folder].length === 0) return;
-                    main.innerHTML += `<h3 class="text-[10px] font-black uppercase text-zinc-500 tracking-widest mt-6 mb-3">${folder} (${grouped[folder].length})</h3>`;
-                    grouped[folder].forEach(item => {
-                        main.innerHTML += `
-                            <button onclick="nav('watch', {id:${item.id}})" class="card w-full p-4 flex justify-between items-center text-[11px] font-black uppercase text-left mb-2">
-                                <span class="truncate pr-4 text-white">${item.title}</span>
-                                <i class="fa-solid fa-play accent text-[8px]"></i>
-                            </button>
-                        `;
-                    });
+                    <!-- Horizontale Filters -->
+                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
+                        <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
+                        <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                        <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                        <button onclick="filterXml('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                    </div>
+
+                    <div id="xml-display-grid" class="space-y-3 mt-2"></div>
+                `;
+
+                const grid = document.getElementById('xml-display-grid');
+                if(!app.xmlLib.length) {
+                    grid.innerHTML = `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen XML data gevonden. Importeer deze bij Profiel.</p>`;
+                    return;
+                }
+
+                let filteredXml = app.xmlLib;
+                if(app.libraryFilter !== 'All') {
+                    filteredXml = app.xmlLib.filter(item => item.status === app.libraryFilter);
+                }
+
+                if(filteredXml.length === 0) {
+                    grid.innerHTML = `<p class="opacity-20 text-xs text-center py-10 uppercase font-black">Geen items gevonden in deze map</p>`;
+                    return;
+                }
+
+                filteredXml.forEach(item => {
+                    grid.innerHTML += `
+                        <button onclick="nav('watch', {id:${item.id}})" class="card w-full p-4 flex justify-between items-center text-[11px] font-black uppercase text-left mb-2">
+                            <div class="truncate pr-4">
+                                <p class="text-white truncate">${item.title}</p>
+                                <p class="text-[7px] accent mt-1">${item.status}</p>
+                            </div>
+                            <i class="fa-solid fa-play accent text-[8px]"></i>
+                        </button>
+                    `;
                 });
-                main.innerHTML += `</div>`;
             }
 
             else if (app.view === 'cloud') {
                 if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Koppel je account bij Profiel</p>`;
-                main.innerHTML = `<h2 class="text-xl font-black accent uppercase italic mb-6">Cloud List</h2><div id="c-list" class="grid grid-cols-2 gap-4"></div>`;
+                
+                // --- CLOUD LIST MET FILTERS NAAST ELKAAR ---
+                main.innerHTML = `
+                    <h2 class="text-xl font-black accent uppercase italic mb-4">Cloud List</h2>
+                    
+                    <!-- Horizontale Filters -->
+                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
+                        <button onclick="filterCloud('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All Lists</button>
+                        <button onclick="filterCloud('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
+                        <button onclick="filterCloud('Completed')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Completed' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
+                        <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
+                    </div>
+
+                    <div id="c-list" class="grid grid-cols-2 gap-4"></div>
+                `;
+
                 gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}}}}}}`, {u: app.user}).then(res => {
                     const list = document.getElementById('c-list');
                     if (!res || !res.data) return;
+                    
+                    let itemsFound = false;
                     res.data.MediaListCollection.lists.forEach(l => {
+                        const listName = l.name.toLowerCase();
+                        const filterLower = app.cloudFilter.toLowerCase();
+                        
+                        if(app.cloudFilter !== 'All' && !listName.includes(filterLower)) return;
+
                         l.entries.forEach(e => {
+                            itemsFound = true;
                             const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
                             list.innerHTML += `
-                                <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="text-left">
-                                    <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5">
-                                        <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-40">
+                                <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="text-left w-full">
+                                    <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5 shadow-lg">
+                                        <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-50">
                                         <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
                                             <span class="text-[8px] font-black accent uppercase bg-black/60 px-2 py-1 rounded">Resume Ep ${e.progress+1}</span>
                                         </div>
                                     </div>
-                                    <p class="text-[9px] font-black uppercase truncate text-zinc-400">${t}</p>
+                                    <p class="text-[9px] font-black uppercase truncate text-zinc-300 leading-none mb-1">${t}</p>
+                                    <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black">${l.name}</p>
                                 </button>
                             `;
                         });
                     });
+
+                    if(!itemsFound) {
+                        list.className = "block text-center py-10 opacity-30";
+                        list.innerHTML = `<p class="text-xs uppercase font-black">Geen anime gevonden in deze lijst</p>`;
+                    }
                 });
             }
 
@@ -396,6 +452,60 @@
             else alert("Sync mislukt. Probeer opnieuw in te loggen.");
         }
 
+        // --- FILTER FUNCTIONALITEIT ---
+        function filterCloud(status) {
+            app.cloudFilter = status;
+            render();
+        }
+
+        function filterXml(status) {
+            app.libraryFilter = status;
+            render();
+        }
+
+        // --- XML TO ANILIST SYNC FEATURE ---
+        async function syncAllXmlToAniList() {
+            if(!app.token) {
+                alert("Je bent niet ingelogd met AniList! Ga naar het profiel en koppel je account.");
+                return;
+            }
+
+            if(!app.xmlLib.length) {
+                alert("Geen geïmporteerde XML lijst gevonden om te synchroniseren.");
+                return;
+            }
+
+            const confirmSync = confirm(`Weet je zeker dat je alle ${app.xmlLib.length} items uit je XML-bibliotheek wilt synchroniseren met je live AniList cloud-account? Dit zal de voortgang direct overschrijven.`);
+            if(!confirmSync) return;
+
+            alert("Synchronisatie is gestart! Sluit dit tabblad niet. Je krijgt een melding zodra alles is verwerkt...");
+
+            const mutationQuery = `mutation($m:Int, $status:MediaListStatus){SaveMediaListEntry(mediaId:$m, status:$status){id}}`;
+            
+            let successCount = 0;
+            let errorCount = 0;
+
+            for(let item of app.xmlLib) {
+                let aniStatus = "CURRENT"; 
+                if (item.status === "Watched") aniStatus = "COMPLETED";
+                if (item.status === "Dropped") aniStatus = "DROPPED";
+                if (item.status === "Plan to Watch") aniStatus = "PLANNING";
+
+                try {
+                    const res = await gql(mutationQuery, {m: parseInt(item.id), status: aniStatus});
+                    if(res && res.data) successCount++;
+                    else errorCount++;
+                } catch(e) {
+                    errorCount++;
+                }
+                // Rate limits omzeilen
+                await new Promise(resolve => setTimeout(resolve, 350));
+            }
+
+            alert(`Synchronisatie voltooid!\n\nSuccesvol bijgewerkt: ${successCount} anime\nMislukt of overgeslagen: ${errorCount}`);
+            nav('cloud');
+        }
+
         function saveSet() {
             app.user = document.getElementById('set-user').value;
             app.lang = document.querySelector('input[name="lang"]:checked').value;
@@ -408,6 +518,7 @@
             app.clientId = document.getElementById('set-client').value || '21074';
 
             localStorage.setItem('amax_user', app.user);
+            localStorage.setItem('amax_client', app.clientId);
             localStorage.setItem('amax_lang', app.lang);
             localStorage.setItem('amax_auto_select', app.autoSelect);
             localStorage.setItem('amax_show_continue', app.showContinue);
@@ -415,7 +526,6 @@
             localStorage.setItem('amax_autonext', app.autoNext);
             localStorage.setItem('amax_autoskip', app.autoSkipIntro);
             localStorage.setItem('amax_skip_seconds', app.skipSeconds);
-            localStorage.setItem('amax_client', app.clientId);
 
             alert("Instellingen opgeslagen!");
             render();
@@ -423,7 +533,6 @@
 
         function redirectToAniList() {
             const currentUrl = window.location.origin + window.location.pathname;
-            // Gebruikt de geconfigureerde Client ID van de gebruiker (of valt terug op het publieke ID)
             const authUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=${app.clientId}&redirect_uri=${encodeURIComponent(currentUrl)}&response_type=token`;
             window.location.href = authUrl;
         }
