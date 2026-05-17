@@ -23,18 +23,31 @@
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
-        /* Simpele, gegarandeerd werkende slide-down animatie voor toasts */
+        /* Toast Container met vaste mobiele marges (Perfect gecentreerd bovenaan) */
+        #toast-container {
+            position: fixed;
+            top: 24px;
+            left: 0;
+            right: 0;
+            margin: 0 auto;
+            width: calc(100% - 32px);
+            max-width: 360px;
+            z-index: 10000;
+            pointer-events: none;
+        }
+
+        /* Vloeiende Slide-Down Animatie vanaf de bovenkant */
         @keyframes slideDown {
-            from { transform: translateY(-20px); opacity: 0; }
+            from { transform: translateY(-100%); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
-        .animate-toast { animation: slideDown 0.3s ease-out forwards; }
+        .animate-toast { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
     </style>
 </head>
 <body class="pb-32 relative">
 
-    <!-- Toast Meldingen Container (Perfect gecentreerd bovenaan) -->
-    <div id="toast-container" class="fixed top-6 left-1/2 -translate-x-1/2 w-[90%] max-w-sm z-[9999] flex flex-col gap-2 pointer-events-none"></div>
+    <!-- Toast Meldingen Container -->
+    <div id="toast-container" class="flex flex-col gap-2"></div>
 
     <!-- Bevestigingsmodal -->
     <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10000] hidden items-center justify-center p-4">
@@ -100,7 +113,7 @@
             const container = document.getElementById('toast-container');
             if(!container) return;
             const toast = document.createElement('div');
-            toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto ${
+            toast.className = `p-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-between shadow-2xl border text-center animate-toast pointer-events-auto w-full ${
                 type === 'error' ? 'bg-red-950/95 text-red-400 border-red-500/20' : 'bg-zinc-900/95 text-accent border-accent/20'
             }`;
             toast.innerHTML = `<span>${message}</span><button onclick="this.parentElement.remove()" class="ml-4 opacity-50 hover:opacity-100"><i class="fa-solid fa-times"></i></button>`;
@@ -247,7 +260,7 @@
                 app.recent = data.recent || [];
                 if (data.settings) {
                     app.defaultAudio = data.settings.defaultAudio || 'sub';
-                    app.mode = app.defaultAudio; // Zet de start-modus naar de voorkeur van de gebruiker
+                    app.mode = app.defaultAudio; 
                     app.user = data.settings.user || app.user;
                     app.showContinue = data.settings.showContinue !== false;
                     app.lang = data.settings.lang || 'english';
@@ -311,7 +324,6 @@
             app.id = params.id || null;
             app.ep = params.ep || 1;
             
-            // Als we naar een video gaan, reset de mode naar de standaard audiosetting
             if (view === 'watch') {
                 app.mode = app.defaultAudio;
             }
@@ -432,7 +444,8 @@
                         saveCloudData(); 
                     });
 
-                    gql(`query($id:Int){Media(id:$id){title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                    // Haal live anime-status en airing details op via AniList GraphQL
+                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                         if (!res || !res.data) {
                             document.getElementById('w-title').innerText = "Informatie niet gevonden";
                             return;
@@ -449,6 +462,9 @@
                         const progressInput = document.getElementById('local-progress-input');
                         const saveBtn = document.getElementById('local-save-btn');
 
+                        // Vind jouw totale voortgang (afgerond)
+                        const userProgress = localItem ? parseInt(localItem.progress) : 0;
+
                         if (localItem) {
                             statusText.innerHTML = `<span class="accent">${localItem.status}</span> - Aflevering ${localItem.progress} / ${m.episodes || '?'}`;
                             selectEl.value = localItem.status;
@@ -462,9 +478,39 @@
                             window.updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12);
                         };
 
+                        // Dynamische berekening van het aantal reeds uitgezonden afleveringen
+                        let totalEpisodes = m.episodes || 12;
+                        let airedEpisodes = totalEpisodes;
+
+                        if (m.status === 'RELEASING' && m.nextAiringEpisode) {
+                            airedEpisodes = m.nextAiringEpisode.episode - 1;
+                        } else if (m.status === 'NOT_YET_RELEASED') {
+                            airedEpisodes = 0;
+                        }
+
                         const grid = document.getElementById('ep-grid');
-                        for(let i=1; i<=(m.episodes || 24); i++) {
-                            grid.innerHTML += `<button onclick="nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-lg font-black text-[10px] ${i==app.ep?'bg-accent text-black shadow-lg':'bg-zinc-900 text-zinc-500'}">${i}</button>`;
+                        grid.innerHTML = ''; // Maak leeg voor opbouw
+                        
+                        for(let i = 1; i <= totalEpisodes; i++) {
+                            let btnClass = "";
+                            let disabledAttr = "";
+
+                            if (i == app.ep) {
+                                // Huidige aflevering die je NU kijkt -> LICHTGROEN (Accent)
+                                btnClass = "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20";
+                            } else if (i <= userProgress) {
+                                // Reeds bekeken afleveringen -> DONKERGROEN
+                                btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
+                            } else if (i <= airedEpisodes) {
+                                // Uitgezonden maar nog niet gezien -> LICHTGRIJS
+                                btnClass = "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
+                            } else {
+                                // Nog niet uitgezonden aflevering -> ZWART / NIET INTERACTIEF
+                                btnClass = "bg-[#0b0b0b] text-zinc-700 border border-white/5 cursor-not-allowed pointer-events-none";
+                                disabledAttr = "disabled";
+                            }
+
+                            grid.innerHTML += `<button onclick="nav('watch', {id:${app.id}, ep:${i}})" ${disabledAttr} class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
                         }
 
                         const relGrid = document.getElementById('rel-grid');
@@ -484,7 +530,6 @@
                 }
 
                 else if (app.view === 'profile') {
-                    // Profile screen ZONDER delete account module
                     main.innerHTML = `
                         <div class="max-w-md mx-auto space-y-6 animate-fade-in">
                             <div class="card p-8 border border-accent/20 shadow-2xl">
