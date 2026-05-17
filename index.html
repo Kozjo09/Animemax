@@ -53,9 +53,6 @@
     <script>
         const API = 'https://graphql.anilist.co';
         
-        // Publieke Client ID ingesteld voor Cloudflare redirect afhandeling
-        const PUBLIC_CLIENT_ID = '21074'; 
-
         // Lokale App State laden
         let app = {
             view: 'home',
@@ -66,6 +63,7 @@
             
             // Instellingen (HiAnime Stijl)
             user: localStorage.getItem('amax_user') || '',
+            clientId: localStorage.getItem('amax_client') || '21074', 
             showContinue: localStorage.getItem('amax_show_continue') !== 'false',
             lang: localStorage.getItem('amax_lang') || 'english',
             autoSelect: localStorage.getItem('amax_auto_select') || 'sub',
@@ -262,6 +260,11 @@
                                 </div>
 
                                 <div class="p-2 border-t border-white/5 pt-4">
+                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Client ID</label>
+                                    <input type="text" id="set-client" value="${app.clientId}" placeholder="Enter Client ID" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
+                                </div>
+
+                                <div class="p-2">
                                     <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username</label>
                                     <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs">
                                 </div>
@@ -323,7 +326,7 @@
                         l.entries.forEach(e => {
                             const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
                             list.innerHTML += `
-                                <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="text-left animate-fade-in">
+                                <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="text-left">
                                     <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5">
                                         <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-40">
                                         <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
@@ -402,6 +405,7 @@
             app.autoNext = document.getElementById('set-autonext').checked;
             app.autoSkipIntro = document.getElementById('set-autoskip').checked;
             app.skipSeconds = parseInt(document.getElementById('set-seconds').value || '5');
+            app.clientId = document.getElementById('set-client').value || '21074';
 
             localStorage.setItem('amax_user', app.user);
             localStorage.setItem('amax_lang', app.lang);
@@ -411,6 +415,7 @@
             localStorage.setItem('amax_autonext', app.autoNext);
             localStorage.setItem('amax_autoskip', app.autoSkipIntro);
             localStorage.setItem('amax_skip_seconds', app.skipSeconds);
+            localStorage.setItem('amax_client', app.clientId);
 
             alert("Instellingen opgeslagen!");
             render();
@@ -418,8 +423,8 @@
 
         function redirectToAniList() {
             const currentUrl = window.location.origin + window.location.pathname;
-            // Gebruikt de speciaal hiervoor geconfigureerde universele Client ID
-            const authUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=${PUBLIC_CLIENT_ID}&redirect_uri=${encodeURIComponent(currentUrl)}&response_type=token`;
+            // Gebruikt de geconfigureerde Client ID van de gebruiker (of valt terug op het publieke ID)
+            const authUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=${app.clientId}&redirect_uri=${encodeURIComponent(currentUrl)}&response_type=token`;
             window.location.href = authUrl;
         }
 
