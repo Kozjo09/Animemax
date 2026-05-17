@@ -63,7 +63,7 @@
             
             // Instellingen (HiAnime Stijl)
             user: localStorage.getItem('amax_user') || '',
-            clientId: localStorage.getItem('amax_client') || '41604', // Jouw AniList Client ID van de foto!
+            clientId: localStorage.getItem('amax_client') || '41604', 
             showContinue: localStorage.getItem('amax_show_continue') !== 'false',
             lang: localStorage.getItem('amax_lang') || 'english',
             autoSelect: localStorage.getItem('amax_auto_select') || 'sub',
@@ -87,19 +87,20 @@
             localStorage.setItem('al_token', token);
             app.token = token;
             window.location.hash = ''; // Adresbalk netjes opschonen
-            
-            // Direct gebruikersnaam ophalen bij succesvolle login
-            gql(`query { Viewer { name } }`).then(res => {
-                if (res && res.data && res.data.Viewer) {
-                    app.user = res.data.Viewer.name;
-                    localStorage.setItem('amax_user', app.user);
-                    alert(`Gekoppeld met AniList account: ${app.user}!`);
-                    nav('cloud');
-                } else {
-                    alert("AniList gekoppeld!");
-                    nav('profile');
-                }
-            });
+            fetchUserData();
+        }
+
+        async function fetchUserData() {
+            const res = await gql(`query { Viewer { name } }`);
+            if (res && res.data && res.data.Viewer) {
+                app.user = res.data.Viewer.name;
+                localStorage.setItem('amax_user', app.user);
+                alert(`Gekoppeld met AniList account: ${app.user}!`);
+                nav('cloud');
+            } else {
+                alert("AniList gekoppeld! Vul handmatig je gebruikersnaam in bij Instellingen.");
+                nav('profile');
+            }
         }
 
         async function gql(query, vars) {
@@ -214,6 +215,7 @@
             }
 
             else if (app.view === 'profile') {
+                const storedToken = localStorage.getItem('al_token') || '';
                 main.innerHTML = `
                     <div class="max-w-md mx-auto space-y-6">
                         <div class="card p-8 border border-accent/20 shadow-2xl">
@@ -279,10 +281,18 @@
                             </div>
                         </div>
 
+                        <!-- HANDMATIG TOKEN KOTJE (Speciaal voor jou toegevoegd!) -->
+                        <div class="card p-8 border border-green-500/20">
+                            <h2 class="font-black uppercase mb-2 text-sm text-center">AniList Manual Token</h2>
+                            <p class="text-[9px] text-zinc-500 uppercase mb-4 leading-relaxed text-center">Als de redirect niet pakt, plak hier de access_token uit de URL:</p>
+                            <input type="text" id="manual-token" value="${storedToken}" placeholder="Paste access_token here..." class="w-full bg-black border border-white/10 p-3 rounded-lg text-xs mb-3 outline-none text-white text-center font-mono">
+                            <button onclick="saveManualToken()" class="w-full bg-zinc-800 hover:bg-accent hover:text-black text-white font-black py-2.5 rounded-lg text-[9px] uppercase transition-all">Save Manual Token</button>
+                        </div>
+
                         <!-- One-Click Auto Auth -->
                         <div class="card p-8 border border-blue-500/20 text-center">
                             <h2 class="font-black uppercase mb-2 text-sm">AniList Sync</h2>
-                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Click to automatically authorize and link your profile.</p>
+                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Klik om via de browser in te loggen op je eigen Client ID.</p>
                             <button onclick="redirectToAniList()" class="block w-full bg-white text-black text-center font-black py-4 rounded-xl text-[10px] uppercase tracking-widest hover:bg-zinc-100">Connect Account</button>
                         </div>
 
@@ -452,6 +462,29 @@
             const r = await gql(q, {m: parseInt(app.id), p: parseInt(app.ep)});
             if(r && r.data) alert("Voortgang succesvol gesynchroniseerd met AniList!");
             else alert("Sync mislukt. Probeer opnieuw in te loggen.");
+        }
+
+        // --- HANDMATIGE TOKEN BEWAREN ---
+        function saveManualToken() {
+            const t = document.getElementById('manual-token').value.trim();
+            if(t) { 
+                localStorage.setItem('al_token', t); 
+                app.token = t;
+                // Gebruikersnaam ophalen met de nieuwe token
+                gql(`query { Viewer { name } }`).then(res => {
+                    if (res && res.data && res.data.Viewer) {
+                        app.user = res.data.Viewer.name;
+                        localStorage.setItem('amax_user', app.user);
+                        alert(`Handmatige koppeling geslaagd! Welkom, ${app.user}!`);
+                        nav('cloud');
+                    } else {
+                        alert("Token opgeslagen, maar kon geen AniList gebruikersnaam ophalen. Controleer of de token klopt.");
+                        nav('profile');
+                    }
+                });
+            } else {
+                alert("Plak eerst de token in het veld.");
+            }
         }
 
         // --- FILTER FUNCTIONALITEIT ---
