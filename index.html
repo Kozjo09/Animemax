@@ -107,7 +107,7 @@
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', libraryFilter: 'All',
             user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 5, 
-            defaultAudio: 'sub', recent: [], xmlLib: []
+            defaultAudio: 'sub', recent: [], xmlLib: [], autoDubFallback: true
         };
 
         // Trackt de exacte afspeeltijd van de active video lokaal
@@ -389,6 +389,7 @@
                     app.autoNext = data.settings.autoNext !== false;
                     app.autoSkipIntro = data.settings.autoSkipIntro === true;
                     app.skipSeconds = parseInt(data.settings.skipSeconds || '5');
+                    app.autoDubFallback = data.settings.autoDubFallback !== false;
                 } else {
                     app.user = sessionData.user.user_metadata?.full_name || sessionData.user.email.split('@')[0];
                 }
@@ -409,7 +410,8 @@
                         autoPlay: app.autoPlay,
                         autoNext: app.autoNext,
                         autoSkipIntro: app.autoSkipIntro,
-                        skipSeconds: app.skipSeconds
+                        skipSeconds: app.skipSeconds,
+                        autoDubFallback: app.autoDubFallback
                     }
                 }]);
                 if (insertErr) {
@@ -438,7 +440,8 @@
                     autoPlay: app.autoPlay,
                     autoNext: app.autoNext,
                     autoSkipIntro: app.autoSkipIntro,
-                    skipSeconds: app.skipSeconds
+                    skipSeconds: app.skipSeconds,
+                    autoDubFallback: app.autoDubFallback
                 }
             }).eq('id', sessionData.user.id);
             if (error) console.error("Cloud opslaan mislukt:", error);
@@ -588,8 +591,8 @@
         function saveCurrentVideoTime() {
             if (app.view !== 'watch' || !app.id) return;
             
-            let rec = app.recent.filter(i => i.id != app.id);
-            const currentItem = app.recent.find(i => i.id == app.id);
+            let rec = app.recent.filter(i => i && i.id != app.id);
+            const currentItem = app.recent.find(i => i && i.id == app.id);
             const img = currentItem ? currentItem.img : '';
             const title = currentItem ? currentItem.title : 'Anime';
 
@@ -647,7 +650,8 @@
         function startDubCheckTimer() {
             if (dubTimeout) clearTimeout(dubTimeout);
             
-            if (app.mode === 'dub') {
+            // Controleert of de fallback-instelling is ingeschakeld in de app-state
+            if (app.mode === 'dub' && app.autoDubFallback !== false) {
                 dubTimeout = setTimeout(() => {
                     triggerDubFallback();
                 }, 3500);
@@ -838,19 +842,11 @@
                         <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
                     `;
 
-                    const autoNext = document.getElementById('toggle-autonext');
-                    if (autoNext) {
-                        autoNext.addEventListener('change', e => { 
-                            app.autoNext = e.target.checked; 
-                            saveCloudDataDebounced(); 
-                        });
-                    }
-
                     const grid = document.getElementById('ep-grid');
                     for (let i = 1; i <= localTotalEpisodes; i++) {
                         let btnClass = (i == app.ep) ? "bg-accent text-black font-black shadow-lg shadow-[#cae962]/20" : "bg-zinc-700 text-zinc-100 hover:bg-zinc-600 font-medium";
                         if (i <= userProgress && i != app.ep) btnClass = "bg-emerald-800 text-emerald-100 hover:bg-emerald-700 font-bold border border-emerald-500/10";
-                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:'${app.id}', ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
+                        grid.innerHTML += `<button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${localTitle.replace(/'/g, "\\'")}', ${i}, ${localTotalEpisodes}, ''); nav('watch', {id:${app.id}, ep:${i}})" class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">${i}</button>`;
                     }
 
                     // VOORKOM CRASHES: Beveilig de find op activeRecent zodat eventueel ontbrekende of null-rijen geen javascript crash geven!
@@ -922,7 +918,7 @@
                                 }
 
                                 grid.innerHTML += `
-                                    <button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:'${app.id}', ep:${i}})" 
+                                    <button onclick="window.autoUpdateProgressOnEpClick('${app.id}', '${title.replace(/'/g, "\\'")}', ${i}, ${totalEpisodes}, '${m.coverImage.large}'); nav('watch', {id:${app.id}, ep:${i}})" 
                                         ${disabledAttr} 
                                         class="aspect-square rounded-xl font-black text-xs transition-all active:scale-95 ${btnClass}">
                                         ${i}
@@ -1036,6 +1032,13 @@
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
+                                    <!-- FEATURE: Auto switch DUB naar SUB instelling toggle -->
+                                    <label class="flex items-center justify-between p-2 cursor-pointer">
+                                        <span class="text-xs font-black uppercase text-zinc-400">Auto switch DUB naar SUB na 3.5 sec</span>
+                                        <input type="checkbox" id="set-autodub" class="toggle-checkbox hidden" ${app.autoDubFallback !== false ? 'checked' : ''}>
+                                        <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
+                                    </label>
+
                                     <div class="flex items-center justify-between p-2">
                                         <span class="text-xs font-black uppercase text-zinc-400">Skip intro seconds</span>
                                         <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs outline-none font-sans">
@@ -1118,7 +1121,7 @@
                 else if (app.view === 'search') {
                     main.innerHTML = `
                         <div class="max-w-md mx-auto mb-10">
-                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold">
+                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none focus:accent text-white font-bold">
                         </div>
                         <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
                     `;
@@ -1151,7 +1154,7 @@
                                 const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
                                 // EXACT HERSTELD: ID ingepakt in single-quotes! Dit voorkomt fouten bij navigatie vanaf homepagina!
                                 grid.innerHTML += `
-                                    <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
+                                    <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-toast">
                                         <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
                                             <img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
                                         </div>
@@ -1308,6 +1311,7 @@
             const setAutoskipEl = document.getElementById('set-autoskip');
             const setSecondsEl = document.getElementById('set-seconds');
             const setUsernameEl = document.getElementById('set-user');
+            const setAutodubEl = document.getElementById('set-autodub');
             const langCheckedEl = document.querySelector('input[name="lang"]:checked');
             const audioCheckedEl = document.querySelector('input[name="audio"]:checked');
 
@@ -1318,6 +1322,7 @@
             if (setAutoplayEl) app.autoPlay = setAutoplayEl.checked;
             if (setAutonextEl) app.autoNext = setAutonextEl.checked;
             if (setAutoskipEl) app.autoSkipIntro = setAutoskipEl.checked;
+            if (setAutodubEl) app.autoDubFallback = setAutodubEl.checked;
             
             if (setSecondsEl) {
                 const secondsVal = parseInt(setSecondsEl.value);
