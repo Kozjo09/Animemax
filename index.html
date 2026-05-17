@@ -23,7 +23,7 @@
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
-        /* Toast Container met vaste mobiele marges (Voorkomt scheve uitlijning) */
+        /* Toast Container met vaste mobiele marges (Perfect gecentreerd bovenaan) */
         #toast-container {
             position: fixed;
             top: 24px;
@@ -46,7 +46,7 @@
 </head>
 <body class="pb-32">
 
-    <!-- Toast Meldingen Container (Gecentreerd bovenaan) -->
+    <!-- Toast Meldingen Container -->
     <div id="toast-container" class="flex flex-col gap-2"></div>
 
     <!-- Bevestigingsmodal -->
@@ -94,20 +94,20 @@
     <script>
         const ANILIST_API = 'https://graphql.anilist.co';
         
-        // Gekoppelde Supabase Database instellingen
+        // Jouw Supabase Database credentials
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
         let sb = null;
         let sessionData = null;
 
-        // Globale App Toestand
+        // Globale App Toestand (Onafhankelijk van database-vertraging!)
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', cloudFilter: 'All', libraryFilter: 'All',
             user: 'Kozjo09', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 5, recent: [], xmlLib: []
         };
 
-        // --- CUSTOM TOAST NOTIFICATIES (Perfect Gecentreerd Bovenaan) ---
+        // --- CUSTOM TOAST NOTIFICATIES ---
         window.showToast = function(message, type = 'success') {
             const container = document.getElementById('toast-container');
             if(!container) return;
@@ -150,21 +150,24 @@
                     throw new Error("Supabase library niet geladen");
                 }
 
-                // Check bestaande actieve sessie
                 const { data: { session } } = await sb.auth.getSession();
                 if (session) {
                     sessionData = session;
+                    // Probeer direct de user in te stellen vanuit de email
+                    if(session.user && session.user.email) {
+                        app.user = session.user.email.split('@')[0];
+                    }
                     await loadCloudData();
                 } else {
                     showLoginPage('login');
                 }
             } catch(e) {
-                console.error("Database verbinding mislukt: ", e);
+                console.error("Database initialisatiefout: ", e);
                 showLoginPage('login');
             }
         };
 
-        // --- INLOGGEN EN REGISTREREN (Supabase Auth Module) ---
+        // --- INLOGGEN EN REGISTREREN ---
         function showLoginPage(mode = 'login') {
             document.getElementById('app-header').classList.add('hidden');
             document.getElementById('app-navigation').classList.add('hidden');
@@ -194,7 +197,7 @@
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mt-16 p-8 card border border-white/5 shadow-2xl">
                         <h2 class="text-3xl font-black italic accent uppercase tracking-tighter mb-2 text-center">ANIME<span class="text-white">MAX</span></h2>
-                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel (RLS)</p>
+                        <p class="text-[10px] text-zinc-500 uppercase tracking-widest text-center mb-8">Log in op je cloud-profiel</p>
                         <div class="space-y-4">
                             <div>
                                 <label class="text-[10px] font-black uppercase text-zinc-400 block mb-1">Gebruikersnaam</label>
@@ -218,20 +221,18 @@
             if (!u || !p) return window.showToast("Vul alle velden in!", "error");
 
             const email = `${u.toLowerCase()}@animemax.local`;
+            app.user = u; // Meteen de username lokaal opslaan!
 
             if (type === 'reg') {
                 const { data, error } = await sb.auth.signUp({ email, password: p });
                 if (error) {
-                    window.showToast("Registratie mislukt: " + error.message, "error");
+                    window.showToast("Registratie mislukt of naam bezet.", "error");
                     return;
                 }
                 
                 if (data.user) {
                     const { error: insertErr } = await sb.from('anime_users').insert([{
-                        id: data.user.id,
-                        username: u,
-                        watchlist: [],
-                        recent: []
+                        id: data.user.id, username: u, watchlist: [], recent: []
                     }]);
                     if(insertErr) console.error("Profiel insert fout:", insertErr);
                 }
@@ -251,28 +252,26 @@
         async function loadCloudData() {
             if (!sessionData) return;
             const { data, error } = await sb.from('anime_users').select('*').eq('id', sessionData.user.id).single();
-            if (error || !data) {
-                console.error("Fout bij laden cloud-data:", error);
-                return;
-            }
-
-            // Hydrateer app state met veilige fallbacks
-            app.xmlLib = data.watchlist || [];
-            app.recent = data.recent || [];
-            if (data.settings) {
-                app.mode = data.settings.mode || 'sub';
-                app.user = data.settings.user || 'Kozjo09';
-                app.showContinue = data.settings.showContinue !== false;
-                app.lang = data.settings.lang || 'english';
-                app.autoPlay = data.settings.autoPlay !== false;
-                app.autoNext = data.settings.autoNext !== false;
-                app.autoSkipIntro = data.settings.autoSkipIntro === true;
-                app.skipSeconds = parseInt(data.settings.skipSeconds || '5');
+            
+            if (data) {
+                // Hydrateer app state vanuit cloud
+                app.xmlLib = data.watchlist || [];
+                app.recent = data.recent || [];
+                if (data.settings) {
+                    app.mode = data.settings.mode || 'sub';
+                    app.user = data.settings.user || app.user;
+                    app.showContinue = data.settings.showContinue !== false;
+                    app.lang = data.settings.lang || 'english';
+                    app.autoPlay = data.settings.autoPlay !== false;
+                    app.autoNext = data.settings.autoNext !== false;
+                    app.autoSkipIntro = data.settings.autoSkipIntro === true;
+                    app.skipSeconds = parseInt(data.settings.skipSeconds || '5');
+                }
             }
 
             document.getElementById('app-header').classList.remove('hidden');
             document.getElementById('app-navigation').classList.remove('hidden');
-            window.showToast(`Welkom, ${data.username}!`);
+            window.showToast(`Welkom terug, ${app.user}!`);
             nav('home');
         }
 
@@ -349,7 +348,7 @@
             }
 
             saveCloudData();
-            window.showToast("Gesynchroniseerd met de cloud!");
+            window.showToast("Opgeslagen in de cloud!");
             render();
         };
 
@@ -389,7 +388,7 @@
                             <!-- Custom Skip Intro Button -->
                             ${app.autoSkipIntro ? `
                                 <button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50">
-                                    <i class="fa-solid fa-forward-fast"></i> Skip Intro (+${app.skipSeconds}s)
+                                    <i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)
                                 </button>
                             ` : ''}
                         </div>
@@ -412,7 +411,7 @@
                         
                         <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between shadow-lg">
                             <div>
-                                <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud database)</p>
+                                <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Cloud)</p>
                                 <h3 id="local-status-text" class="text-xs font-bold text-white mt-1">Laden...</h3>
                             </div>
                             <div class="flex gap-2 flex-wrap">
@@ -490,41 +489,41 @@
                 }
 
                 else if (app.view === 'profile') {
-                    // Volledig hersteld en crash-beveiligd Profiel- en Instellingenscherm (ZONDER verwijderknop)
+                    // Profile screen direct weergegeven via app.user! (Geen database wait nodig)
                     main.innerHTML = `
                         <div class="max-w-md mx-auto space-y-6 animate-fade-in">
                             <div class="card p-8 border border-accent/20 shadow-2xl">
                                 <div class="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
                                     <h2 class="font-black uppercase text-sm flex items-center gap-2"><i class="fa-solid fa-sliders accent"></i> Settings</h2>
-                                    <span class="bg-accent/10 border border-accent/20 text-accent text-[9px] px-3 py-1 rounded-full uppercase font-black">User: ${currentUser ? currentUser.username : 'Gekoppeld'}</span>
+                                    <span class="bg-accent/10 border border-accent/20 text-accent text-[9px] px-3 py-1 rounded-full uppercase font-black">User: ${app.user}</span>
                                 </div>
                                 
                                 <div class="space-y-4">
                                     <!-- Continue Watching instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Show continue watching on home</span>
-                                        <input type="checkbox" id="set-continue" class="toggle-checkbox hidden" ${app.showContinue ? 'checked' : ''}>
+                                        <input type="checkbox" id="set-continue" class="toggle-checkbox hidden" ${app.showContinue?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
                                     <!-- Auto Play instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Auto Play video</span>
-                                        <input type="checkbox" id="set-autoplay" class="toggle-checkbox hidden" ${app.autoPlay ? 'checked' : ''}>
+                                        <input type="checkbox" id="set-autoplay" class="toggle-checkbox hidden" ${app.autoPlay?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
                                     <!-- Auto Next instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Auto Next episode</span>
-                                        <input type="checkbox" id="set-autonext" class="toggle-checkbox hidden" ${app.autoNext ? 'checked' : ''}>
+                                        <input type="checkbox" id="set-autonext" class="toggle-checkbox hidden" ${app.autoNext?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
                                     <!-- Auto Skip Intro instelling -->
                                     <label class="flex items-center justify-between p-2 cursor-pointer">
                                         <span class="text-xs font-black uppercase text-zinc-400">Enable skip intro button</span>
-                                        <input type="checkbox" id="set-autoskip" class="toggle-checkbox hidden" ${app.autoSkipIntro ? 'checked' : ''}>
+                                        <input type="checkbox" id="set-autoskip" class="toggle-checkbox hidden" ${app.autoSkipIntro?'checked':''}>
                                         <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                     </label>
 
@@ -549,7 +548,7 @@
                                         <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
                                     </div>
 
-                                    <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest mt-4">Save Settings</button>
+                                    <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-xs uppercase tracking-widest mt-4 hover:opacity-90">Save Settings</button>
                                 </div>
                             </div>
 
@@ -677,7 +676,7 @@
                                             <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black mb-2">${l.name}</p>
                                         </button>
                                         
-                                        <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md">
+                                        <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow-md" title="Kopieer naar Cloud Bibliotheek">
                                             <i class="fa-solid fa-cloud-arrow-down mr-1"></i> Import
                                         </button>
                                     </div>
@@ -752,7 +751,7 @@
                     command: "seek",
                     value: app.skipSeconds
                 }), "*");
-                window.showToast(`Intro overgeslagen met +${app.skipSeconds} seconden!`);
+                window.showToast(`Intro overgeslagen (+${app.skipSeconds}s)`);
             }
         };
 
@@ -848,7 +847,7 @@
                         }
                         app.xmlLib = data;
                         saveCloudData();
-                        window.showToast(`MyAnimeList XML succesvol geïmporteerd (${data.length} items)!`);
+                        window.showToast(`MyAnimeList XML geïmporteerd (${data.length} items)!`);
                         nav('library');
                         return;
                     }
@@ -871,7 +870,7 @@
                         }
                         app.xmlLib = data;
                         saveCloudData();
-                        window.showToast(`HiAnime XML database succesvol geïmporteerd (${data.length} items)!`);
+                        window.showToast(`HiAnime XML geïmporteerd (${data.length} items)!`);
                         nav('library');
                         return;
                     }
@@ -880,7 +879,27 @@
                 }
             };
             reader.readAsText(file);
-        };
+        }
+
+        // AutoPlay Fix
+        document.body.addEventListener('click', () => {
+            const ifr = document.getElementById('player');
+            if(ifr) {
+                ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"unmute"}), "*");
+                if (app.autoPlay) {
+                    ifr.contentWindow.postMessage(JSON.stringify({event:"command",command:"play"}), "*");
+                }
+            }
+        }, {once:true});
+
+        // Event Listener voor Megaplay Auto Next
+        window.addEventListener("message", e => {
+            let data = e.data;
+            if (typeof data === "string") { try { data = JSON.parse(data); } catch(err) {} }
+            if(data.event === "complete" && localStorage.getItem('amax_autonext') !== 'false') {
+                nav('watch', {id: app.id, ep: app.ep + 1});
+            }
+        });
     </script>
 </body>
 </html>
