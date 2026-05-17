@@ -63,7 +63,7 @@
             
             // Instellingen (HiAnime Stijl)
             user: localStorage.getItem('amax_user') || '',
-            clientId: localStorage.getItem('amax_client') || '', // Het AniList Client ID invoervakje
+            clientId: localStorage.getItem('amax_client') || '41604', // Jouw AniList Client ID van de foto!
             showContinue: localStorage.getItem('amax_show_continue') !== 'false',
             lang: localStorage.getItem('amax_lang') || 'english',
             autoSelect: localStorage.getItem('amax_auto_select') || 'sub',
@@ -89,14 +89,14 @@
             window.location.hash = ''; // Adresbalk netjes opschonen
             
             // Direct gebruikersnaam ophalen bij succesvolle login
-            gql(`query{Viewer{name}}`).then(res => {
+            gql(`query { Viewer { name } }`).then(res => {
                 if (res && res.data && res.data.Viewer) {
                     app.user = res.data.Viewer.name;
                     localStorage.setItem('amax_user', app.user);
                     alert(`Gekoppeld met AniList account: ${app.user}!`);
                     nav('cloud');
                 } else {
-                    alert("AniList gekoppeld! Vul handmatig je gebruikersnaam in bij Instellingen.");
+                    alert("AniList gekoppeld!");
                     nav('profile');
                 }
             });
@@ -104,8 +104,9 @@
 
         async function gql(query, vars) {
             const headers = { 'Content-Type': 'application/json' };
-            if (app.token) {
-                headers['Authorization'] = 'Bearer ' + app.token;
+            const token = localStorage.getItem('al_token');
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
             }
             try {
                 const r = await fetch(API, {
@@ -137,6 +138,7 @@
 
         function render() {
             const main = document.getElementById('content');
+            const hasToken = !!localStorage.getItem('al_token');
             
             // Update navigatie balk
             document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('accent'));
@@ -146,7 +148,7 @@
                 activeNav.classList.add('accent');
                 activeNav.classList.remove('text-zinc-600');
             }
-            document.getElementById('prof-btn').classList.toggle('accent', !!app.token);
+            document.getElementById('prof-btn').classList.toggle('accent', hasToken);
 
             if (app.view === 'watch') {
                 main.innerHTML = `
@@ -263,10 +265,9 @@
                                     <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs">
                                 </div>
 
-                                <!-- GEVRAAGDE CLIENT ID VAK VOOR ANILIST -->
                                 <div class="p-2 border-t border-white/5 pt-4">
-                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1 accent">AniList Client ID</label>
-                                    <input type="text" id="set-client" value="${app.clientId}" placeholder="Enter Client ID (e.g. 21543)" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
+                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Client ID</label>
+                                    <input type="text" id="set-client" value="${app.clientId}" placeholder="Enter Client ID" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
                                 </div>
 
                                 <div class="p-2">
@@ -296,9 +297,9 @@
             }
 
             else if (app.view === 'library') {
-                // --- XML LIST MET FILTERS NAAST ELKAAR ---
+                // --- XML LIST FILTERS ---
                 main.innerHTML = `
-                    <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
                         <h2 class="text-xl font-black accent uppercase italic">Local Library</h2>
                         ${app.xmlLib.length ? `<button onclick="syncAllXmlToAniList()" class="bg-[#121212] hover:bg-accent hover:text-black border border-accent/25 text-accent text-[9px] font-black px-3 py-1.5 rounded-lg uppercase transition-all"><i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Sync Library to Cloud</button>` : ''}
                     </div>
@@ -344,9 +345,9 @@
             }
 
             else if (app.view === 'cloud') {
-                if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Koppel je account bij Profiel</p>`;
+                if(!hasToken) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Koppel je account bij Profiel</p>`;
                 
-                // --- CLOUD LIST MET FILTERS NAAST ELKAAR ---
+                // --- CLOUD LIST FILTERS ---
                 main.innerHTML = `
                     <h2 class="text-xl font-black accent uppercase italic mb-4">Cloud List</h2>
                     
@@ -445,7 +446,8 @@
         }
 
         async function sync() {
-            if(!app.token) return alert("Koppel eerst je AniList account in je profiel!");
+            const hasToken = !!localStorage.getItem('al_token');
+            if(!hasToken) return alert("Koppel eerst je AniList account in je profiel!");
             const q = `mutation($m:Int,$p:Int){SaveMediaListEntry(mediaId:$m,progress:$p,status:CURRENT){progress}}`;
             const r = await gql(q, {m: parseInt(app.id), p: parseInt(app.ep)});
             if(r && r.data) alert("Voortgang succesvol gesynchroniseerd met AniList!");
@@ -465,7 +467,8 @@
 
         // --- XML TO ANILIST SYNC FEATURE ---
         async function syncAllXmlToAniList() {
-            if(!app.token) {
+            const hasToken = !!localStorage.getItem('al_token');
+            if(!hasToken) {
                 alert("Je bent niet ingelogd met AniList! Ga naar het profiel en koppel je account.");
                 return;
             }
@@ -508,6 +511,7 @@
 
         function saveSet() {
             app.user = document.getElementById('set-user').value;
+            app.clientId = document.getElementById('set-client').value || '21074';
             app.lang = document.querySelector('input[name="lang"]:checked').value;
             app.autoSelect = document.getElementById('set-select').value;
             app.showContinue = document.getElementById('set-continue').checked;
@@ -515,7 +519,6 @@
             app.autoNext = document.getElementById('set-autonext').checked;
             app.autoSkipIntro = document.getElementById('set-autoskip').checked;
             app.skipSeconds = parseInt(document.getElementById('set-seconds').value || '5');
-            app.clientId = document.getElementById('set-client').value || '21074';
 
             localStorage.setItem('amax_user', app.user);
             localStorage.setItem('amax_client', app.clientId);
