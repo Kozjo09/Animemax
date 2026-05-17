@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AnimeMax Pro</title>
+    <title>AnimeMax Pro - MAL XML Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
@@ -53,12 +53,6 @@
     <script>
         const API = 'https://graphql.anilist.co';
         
-        let savedToken = localStorage.getItem('al_token');
-        if (savedToken === 'null' || savedToken === 'undefined' || !savedToken) {
-            savedToken = '';
-            localStorage.removeItem('al_token');
-        }
-
         // Lokale App State laden
         let app = {
             view: 'home',
@@ -68,9 +62,7 @@
             searchQuery: '',
             
             // Instellingen (HiAnime Stijl)
-            user: localStorage.getItem('amax_user') || '',
-            clientId: localStorage.getItem('amax_client') || '41604', 
-            clientSecret: localStorage.getItem('amax_secret') || '', // Jouw Client Secret van AniList
+            user: localStorage.getItem('amax_user') || 'Kozjo09', 
             showContinue: localStorage.getItem('amax_show_continue') !== 'false',
             lang: localStorage.getItem('amax_lang') || 'english',
             autoSelect: localStorage.getItem('amax_auto_select') || 'sub',
@@ -79,99 +71,26 @@
             skipSeconds: parseInt(localStorage.getItem('amax_skip_seconds') || '5'),
             autoSkipIntro: localStorage.getItem('amax_autoskip') === 'true',
             
-            token: savedToken,
             recent: JSON.parse(localStorage.getItem('amax_recent') || '[]'),
-            xmlLib: JSON.parse(localStorage.getItem('amax_xml') || '[]'),
+            xmlLib: JSON.parse(localStorage.getItem('amax_xml') || '[]'), // Onze bewerkbare lokale lijst!
             
             // Actieve filter states
             cloudFilter: 'All',
             libraryFilter: 'All'
         };
 
-        // --- CODE-TO-TOKEN WISSEL VIA CORS-PROXY ---
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('code')) {
-            const code = urlParams.get('code');
-            // Schoon de URL direct op zodat de code niet in beeld blijft
-            window.history.replaceState({}, document.title, window.location.origin + window.location.pathname);
-            exchangeCodeForToken(code);
-        }
-
-        async function exchangeCodeForToken(code) {
-            const redirectUri = window.location.origin + window.location.pathname;
-            
-            if (!app.clientId || !app.clientSecret) {
-                alert("Fout: Zorg ervoor dat zowel je Client ID als Client Secret zijn opgeslagen in de instellingen!");
-                nav('profile');
-                return;
-            }
-
-            // We gebruiken corsproxy.io om de CORS blokkade van AniList te omzeilen!
-            const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent('https://anilist.co/api/v2/oauth/token');
-
-            try {
-                const response = await fetch(proxyUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        grant_type: 'authorization_code',
-                        client_id: app.clientId,
-                        client_secret: app.clientSecret,
-                        redirect_uri: redirectUri,
-                        code: code
-                    })
-                });
-
-                const data = await response.json();
-                if (data.access_token) {
-                    localStorage.setItem('al_token', data.access_token);
-                    app.token = data.access_token;
-                    
-                    // Direct profielnaam ophalen met de nieuwe token
-                    const userRes = await gql(`query { Viewer { name } }`);
-                    if (userRes && userRes.data && userRes.data.Viewer) {
-                        app.user = userRes.data.Viewer.name;
-                        localStorage.setItem('amax_user', app.user);
-                        alert(`Succesvol gekoppeld met account: ${app.user}!`);
-                    } else {
-                        alert("Succesvol verbonden met AniList!");
-                    }
-                    nav('cloud');
-                } else {
-                    alert("OAuth Fout: " + (data.message || JSON.stringify(data)));
-                }
-            } catch (e) {
-                console.error(e);
-                alert("Er is een fout opgetreden bij het verbinden met AniList via de proxy.");
-            }
-        }
-
+        // GraphQL Query zonder token (altijd openbare data!)
         async function gql(query, vars) {
             const headers = { 'Content-Type': 'application/json' };
-            const token = localStorage.getItem('al_token');
-            if (token && token !== 'null' && token !== 'undefined') {
-                headers['Authorization'] = 'Bearer ' + token;
-            }
             try {
                 const r = await fetch(API, {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify({ query, variables: vars })
                 });
-                const res = await r.json();
-                
-                // Als de token verlopen of ongeldig is, gooi hem direct weg om de site te redden
-                if (res && res.errors && res.errors.some(err => err.status === 401 || err.message.includes('Invalid token'))) {
-                    localStorage.removeItem('al_token');
-                    app.token = '';
-                    render();
-                }
-                return res;
+                return await r.json();
             } catch(e) {
-                console.error("GraphQL request mislukt: ", e);
+                console.error("GraphQL API Fout: ", e);
                 return null;
             }
         }
@@ -191,9 +110,42 @@
             localStorage.setItem('amax_recent', JSON.stringify(app.recent));
         }
 
+        // --- LOKALE BEWERKINGSFUNCTIES ---
+        function updateLocalItem(id, title, status, progress, totalEpisodes = 12) {
+            let found = false;
+            app.xmlLib = app.xmlLib.map(item => {
+                if (item.id == id) {
+                    found = true;
+                    return { ...item, status, progress: parseInt(progress), episodes: totalEpisodes };
+                }
+                return item;
+            });
+
+            if (!found) {
+                app.xmlLib.push({
+                    id: id.toString(),
+                    title: title,
+                    status: status,
+                    progress: parseInt(progress),
+                    episodes: totalEpisodes
+                });
+            }
+
+            localStorage.setItem('amax_xml', JSON.stringify(app.xmlLib));
+            alert("Lijst succesvol bijgewerkt!");
+            render();
+        }
+
+        function deleteLocalItem(id) {
+            if(confirm("Weet je zeker dat je deze anime uit je lijst wilt verwijderen?")) {
+                app.xmlLib = app.xmlLib.filter(item => item.id != id);
+                localStorage.setItem('amax_xml', JSON.stringify(app.xmlLib));
+                render();
+            }
+        }
+
         function render() {
             const main = document.getElementById('content');
-            const hasToken = !!localStorage.getItem('al_token');
             
             // Update navigatie balk
             document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('accent'));
@@ -203,7 +155,7 @@
                 activeNav.classList.add('accent');
                 activeNav.classList.remove('text-zinc-600');
             }
-            document.getElementById('prof-btn').classList.toggle('accent', hasToken);
+            document.getElementById('prof-btn').classList.toggle('accent', !!app.user);
 
             if (app.view === 'watch') {
                 main.innerHTML = `
@@ -222,11 +174,28 @@
                                 <div class="w-8 h-4 bg-zinc-800 rounded-full relative toggle-bg transition-all"><div class="w-4 h-4 bg-white rounded-full absolute left-0 toggle-dot transition-transform"></div></div>
                                 <span class="text-[9px] font-black uppercase text-zinc-400">Auto Next</span>
                             </label>
-                            <button onclick="sync()" class="bg-black border border-accent/20 text-accent px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest"><i class="fa-solid fa-sync mr-1"></i> Sync</button>
                         </div>
                     </div>
 
-                    <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-6">Laden...</h1>
+                    <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">Laden...</h1>
+                    
+                    <!-- LOKALE TRACKING STATUS KAART -->
+                    <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between">
+                        <div>
+                            <p class="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Jouw Status (Lokaal bewerkbaar)</p>
+                            <h3 id="local-status-text" class="text-xs font-bold text-white mt-1">Laden...</h3>
+                        </div>
+                        <div class="flex gap-2 flex-wrap">
+                            <select id="local-status-select" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 font-bold">
+                                <option value="Watching">Watching</option>
+                                <option value="Watched">Completed</option>
+                                <option value="Dropped">Dropped</option>
+                            </select>
+                            <input type="number" id="local-progress-input" value="0" class="bg-black text-white text-xs border border-white/10 rounded-lg p-2 w-16 text-center font-bold">
+                            <button id="local-save-btn" class="bg-accent text-black px-4 py-2 rounded-lg text-xs font-black uppercase">Opslaan</button>
+                        </div>
+                    </div>
+
                     <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8"></div>
                     <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4 tracking-widest">Related Seasons</h2>
                     <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
@@ -246,6 +215,26 @@
                     document.getElementById('w-title').innerText = title;
                     
                     saveRecent(app.id, title, m.coverImage.large, app.ep);
+
+                    // Laad en configureer de lokale status van deze anime
+                    const localItem = app.xmlLib.find(item => item.id == app.id);
+                    const statusText = document.getElementById('local-status-text');
+                    const selectEl = document.getElementById('local-status-select');
+                    const progressInput = document.getElementById('local-progress-input');
+                    const saveBtn = document.getElementById('local-save-btn');
+
+                    if (localItem) {
+                        statusText.innerHTML = `<span class="accent">${localItem.status}</span> - Aflevering ${localItem.progress} / ${m.episodes || '?'}`;
+                        selectEl.value = localItem.status;
+                        progressInput.value = localItem.progress;
+                    } else {
+                        statusText.innerHTML = `<span class="text-zinc-500">Niet in je bibliotheek</span>`;
+                        progressInput.value = app.ep;
+                    }
+
+                    saveBtn.onclick = () => {
+                        updateLocalItem(app.id, title, selectEl.value, progressInput.value, m.episodes || 12);
+                    };
 
                     const grid = document.getElementById('ep-grid');
                     for(let i=1; i<=(m.episodes || 24); i++) {
@@ -320,36 +309,27 @@
                                     <input type="number" id="set-seconds" value="${app.skipSeconds}" class="w-16 bg-black border border-white/10 p-2 rounded-lg text-center font-bold text-xs">
                                 </div>
 
-                                <!-- CLIENT ID EN SECRET INVOERBOXEN -->
                                 <div class="p-2 border-t border-white/5 pt-4">
-                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Client ID</label>
-                                    <input type="text" id="set-client" value="${app.clientId}" placeholder="Enter Client ID (e.g. 41604)" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
-                                </div>
-
-                                <div class="p-2">
-                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Client Secret</label>
-                                    <input type="password" id="set-secret" value="${app.clientSecret}" placeholder="Enter Client Secret" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs text-white">
-                                </div>
-
-                                <div class="p-2">
-                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username</label>
-                                    <input type="text" id="set-user" value="${app.user}" placeholder="Your Username" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs">
+                                    <label class="text-[9px] font-black uppercase text-zinc-500 block mb-1">AniList Username (Voor Cloud List fetch)</label>
+                                    <input type="text" id="set-user" value="${app.user}" placeholder="Your Username (e.g. Kozjo09)" class="w-full bg-black border border-white/10 p-3 rounded-xl text-center outline-none font-bold text-xs">
                                 </div>
 
                                 <button onclick="saveSet()" class="bg-accent text-black font-black py-4 rounded-xl w-full text-[10px] uppercase tracking-widest mt-4">Save Settings</button>
                             </div>
                         </div>
 
-                        <!-- One-Click Auto Auth (Gebruikt nu code flow via proxy) -->
-                        <div class="card p-8 border border-blue-500/20 text-center">
-                            <h2 class="font-black uppercase mb-2 text-sm">AniList Sync</h2>
-                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Click to automatically authorize and link your profile.</p>
-                            <button onclick="redirectToAniList()" class="block w-full bg-white text-black text-center font-black py-4 rounded-xl text-[10px] uppercase tracking-widest hover:bg-zinc-100">Connect Account</button>
+                        <!-- GEVRAAGDE EXPORT NAAR OFFICIEEL MYANIMELIST XML-FORMAAT -->
+                        <div class="card p-8 border border-green-500/20 text-center">
+                            <h2 class="font-black uppercase mb-2 text-sm">Download MAL-XML Exporteer</h2>
+                            <p class="text-[9px] text-zinc-500 uppercase mb-6 leading-relaxed">Exporteer je lokale bibliotheek direct als een officieel MyAnimeList XML bestand voor import overal!</p>
+                            <button onclick="exportMyAnimeListXML()" class="block w-full bg-zinc-900 hover:bg-accent hover:text-black text-white font-black py-4 rounded-xl text-[10px] uppercase tracking-widest border border-white/15 transition-all">
+                                <i class="fa-solid fa-file-export mr-1.5"></i> Download MyAnimeList XML
+                            </button>
                         </div>
 
-                        <!-- XML Upload -->
+                        <!-- XML / JSON Upload (Werkt met MAL formaten, HiAnime XML én JSON back-ups) -->
                         <div class="card p-8 border border-white/5 text-center">
-                            <h2 class="font-black uppercase mb-4 text-sm">Import XML Watchlist</h2>
+                            <h2 class="font-black uppercase mb-4 text-sm">Import XML / JSON Watchlist</h2>
                             <input type="file" id="xml-input" class="text-[10px] text-zinc-500 mb-6 block mx-auto">
                             <button onclick="handleXML()" class="w-full bg-zinc-800 py-3 rounded-lg text-[10px] font-black uppercase border border-white/10">Upload Database</button>
                         </div>
@@ -358,15 +338,15 @@
             }
 
             else if (app.view === 'library') {
-                // --- XML LIST MET FILTERS NAAST ELKAAR ---
+                // --- BEWERKBARE LOKALE BIBLIOTHEEK MET FILTERS ---
                 main.innerHTML = `
                     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
                         <h2 class="text-xl font-black accent uppercase italic">Local Library</h2>
-                        ${app.xmlLib.length ? `<button onclick="syncAllXmlToAniList()" class="bg-[#121212] hover:bg-accent hover:text-black border border-accent/25 text-accent text-[9px] font-black px-3 py-1.5 rounded-lg uppercase transition-all"><i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Sync Library to Cloud</button>` : ''}
+                        <span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span>
                     </div>
 
                     <!-- Horizontale Filters -->
-                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
+                    <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
                         <button onclick="filterXml('All')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'All' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">All</button>
                         <button onclick="filterXml('Watching')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watching' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Watching</button>
                         <button onclick="filterXml('Watched')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.libraryFilter === 'Watched' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Completed</button>
@@ -378,7 +358,7 @@
 
                 const grid = document.getElementById('xml-display-grid');
                 if(!app.xmlLib.length) {
-                    grid.innerHTML = `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen XML data gevonden. Importeer deze bij Profiel.</p>`;
+                    grid.innerHTML = `<p class="opacity-30 text-xs text-center py-10 uppercase font-black">Geen data gevonden. Importeer een XML/JSON bestand of begin met kijken!</p>`;
                     return;
                 }
 
@@ -394,23 +374,35 @@
 
                 filteredXml.forEach(item => {
                     grid.innerHTML += `
-                        <button onclick="nav('watch', {id:${item.id}})" class="card w-full p-4 flex justify-between items-center text-[11px] font-black uppercase text-left mb-2">
-                            <div class="truncate pr-4">
-                                <p class="text-white truncate">${item.title}</p>
-                                <p class="text-[7px] accent mt-1">${item.status}</p>
+                        <div class="card w-full p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3 border border-white/5">
+                            <div class="truncate pr-4 flex-1">
+                                <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black uppercase">${item.status}</span>
+                                    <span class="text-[9px] text-zinc-500 font-bold uppercase">Progress: ${item.progress} / ${item.episodes || '?'}</span>
+                                </div>
                             </div>
-                            <i class="fa-solid fa-play accent text-[8px]"></i>
-                        </button>
+                            
+                            <!-- Snelle actie-besturing -->
+                            <div class="flex items-center gap-2 self-end sm:self-auto">
+                                <button onclick="nav('watch', {id:${item.id}, ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black p-2.5 rounded-lg text-xs text-zinc-400 transition-colors"><i class="fa-solid fa-play"></i> Watch</button>
+                                <button onclick="quickIncrement(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400 font-black" title="Volgende aflevering">+1 Ep</button>
+                                <button onclick="changeLocalFolderPrompt(${item.id})" class="bg-[#1a1a1a] hover:bg-zinc-800 p-2.5 rounded-lg text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
+                                <button onclick="deleteLocalItem(${item.id})" class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white p-2.5 rounded-lg text-xs transition-colors"><i class="fa-solid fa-trash"></i></button>
+                            </div>
+                        </div>
                     `;
                 });
             }
 
             else if (app.view === 'cloud') {
-                if(!hasToken) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Koppel je account bij Profiel</p>`;
+                if(!app.user) return main.innerHTML = `<p class="text-center py-20 opacity-20 uppercase font-black text-xs tracking-widest">Voeg je AniList gebruikersnaam toe bij Instellingen</p>`;
                 
-                // --- CLOUD LIST FILTERS ---
+                // --- CLOUD LIST DIRECT OPGEHAALD VIA GEBRUIKERSNAAM ---
                 main.innerHTML = `
-                    <h2 class="text-xl font-black accent uppercase italic mb-4">Cloud List</h2>
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-black accent uppercase italic">Cloud List: ${app.user}</h2>
+                    </div>
                     
                     <!-- Horizontale Filters -->
                     <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-2">
@@ -420,13 +412,17 @@
                         <button onclick="filterCloud('Dropped')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-wider ${app.cloudFilter === 'Dropped' ? 'bg-accent text-black shadow-lg' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">Dropped</button>
                     </div>
 
-                    <div id="c-list" class="grid grid-cols-2 gap-4"></div>
+                    <div id="c-list" class="grid grid-cols-2 gap-4">Laden...</div>
                 `;
 
-                gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}}}}}}`, {u: app.user}).then(res => {
+                gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user}).then(res => {
                     const list = document.getElementById('c-list');
-                    if (!res || !res.data) return;
+                    if (!res || !res.data || !res.data.MediaListCollection) {
+                        list.innerHTML = `<p class="col-span-2 text-center py-10 opacity-30 text-xs font-black uppercase">Kon de openbare AniList van ${app.user} niet vinden of laden.</p>`;
+                        return;
+                    }
                     
+                    list.innerHTML = '';
                     let itemsFound = false;
                     res.data.MediaListCollection.lists.forEach(l => {
                         const listName = l.name.toLowerCase();
@@ -438,16 +434,23 @@
                             itemsFound = true;
                             const t = app.lang === 'english' ? (e.media.title.english || e.media.title.romaji) : e.media.title.romaji;
                             list.innerHTML += `
-                                <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="text-left w-full">
-                                    <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5 shadow-lg">
-                                        <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-50">
-                                        <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
-                                            <span class="text-[8px] font-black accent uppercase bg-black/60 px-2 py-1 rounded">Resume Ep ${e.progress+1}</span>
+                                <div class="text-left w-full group relative">
+                                    <button onclick="nav('watch', {id:${e.media.id}, ep:${e.progress+1}})" class="w-full text-left">
+                                        <div class="aspect-video rounded-xl overflow-hidden mb-2 relative bg-zinc-900 border border-white/5">
+                                            <img src="${e.media.coverImage.large}" class="w-full h-full object-cover opacity-50 group-hover:scale-105 transition-transform duration-300">
+                                            <div class="absolute inset-0 flex items-center justify-center flex-col gap-1">
+                                                <span class="text-[8px] font-black accent uppercase bg-black/60 px-2 py-1 rounded">Resume Ep ${e.progress+1}</span>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <p class="text-[9px] font-black uppercase truncate text-zinc-300 leading-none mb-1">${t}</p>
-                                    <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black">${l.name}</p>
-                                </button>
+                                        <p class="text-[9px] font-black uppercase truncate text-zinc-300 leading-none mb-1">${t}</p>
+                                        <p class="text-[7px] text-zinc-500 uppercase tracking-widest font-black mb-2">${l.name}</p>
+                                    </button>
+                                    
+                                    <!-- Knop om direct te importeren naar je Lokale Bibliotheek -->
+                                    <button onclick="importSingleCloudItem(${e.media.id}, '${t.replace(/'/g, "\\'")}', '${l.name}', ${e.progress}, ${e.media.episodes || 12})" class="absolute top-2 right-2 bg-black/90 hover:bg-accent hover:text-black border border-white/10 text-white p-1.5 rounded text-[8px] font-black uppercase transition-all shadow" title="Kopieer naar Lokale Bibliotheek">
+                                        <i class="fa-solid fa-cloud-arrow-down mr-1"></i> Import
+                                    </button>
+                                </div>
                             `;
                         });
                     });
@@ -462,7 +465,7 @@
             else if (app.view === 'search') {
                 main.innerHTML = `
                     <div class="max-w-md mx-auto mb-10">
-                        <input type="text" id="live-search" placeholder="Search titles..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none font-bold text-sm focus:border-accent/40">
+                        <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900/50 border border-white/10 p-4 rounded-xl outline-none font-bold text-sm focus:border-accent/40">
                     </div>
                     <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>
                 `;
@@ -472,7 +475,7 @@
                 // HOME VIEW
                 main.innerHTML = `
                     ${app.showContinue && app.recent.length ? `
-                        <h2 class="text-[10px] font-black uppercase mb-4 opacity-50 tracking-widest">Continue Watching</h2>
+                        <h2 class="text-[10px] font-black uppercase mb-4 opacity-50 tracking-widest">Continue Watching (Lokaal)</h2>
                         <div class="flex gap-3 overflow-x-auto no-scrollbar mb-10">
                             ${app.recent.map(r => `
                                 <button onclick="nav('watch', {id:${r.id}, ep:${r.ep}})" class="flex-shrink-0 w-40 group text-left animate-fade-in">
@@ -506,16 +509,97 @@
             }
         }
 
-        async function sync() {
-            const hasToken = !!localStorage.getItem('al_token');
-            if(!hasToken) return alert("Koppel eerst je AniList account in je profiel!");
-            const q = `mutation($m:Int,$p:Int){SaveMediaListEntry(mediaId:$m,progress:$p,status:CURRENT){progress}}`;
-            const r = await gql(q, {m: parseInt(app.id), p: parseInt(app.ep)});
-            if(r && r.data) alert("Voortgang succesvol gesynchroniseerd met AniList!");
-            else alert("Sync mislukt. Probeer opnieuw in te loggen.");
+        // --- HULPFUNCTIES VOOR DE DIRECTE EDITOR IN JE BROWSER ---
+        function quickIncrement(id) {
+            app.xmlLib = app.xmlLib.map(item => {
+                if (item.id == id) {
+                    const nextProgress = item.progress + 1;
+                    return { ...item, progress: nextProgress };
+                }
+                return item;
+            });
+            localStorage.setItem('amax_xml', JSON.stringify(app.xmlLib));
+            render();
         }
 
-        // --- FILTER FUNCTIONALITEIT ---
+        function changeLocalFolderPrompt(id) {
+            const item = app.xmlLib.find(i => i.id == id);
+            if (!item) return;
+            const newStatus = prompt("Typ een nieuwe status (Watching, Watched, Dropped):", item.status);
+            if (newStatus && ["Watching", "Watched", "Dropped"].includes(newStatus)) {
+                updateLocalItem(item.id, item.title, newStatus, item.progress, item.episodes);
+            } else if (newStatus) {
+                alert("Ongeldige status! Gebruik: Watching, Watched, of Dropped.");
+            }
+        }
+
+        function importSingleCloudItem(id, title, cloudStatus, progress, totalEpisodes) {
+            let localStatus = "Watching";
+            if (cloudStatus.toLowerCase().includes("completed")) localStatus = "Watched";
+            if (cloudStatus.toLowerCase().includes("dropped")) localStatus = "Dropped";
+
+            updateLocalItem(id, title, localStatus, progress, totalEpisodes);
+        }
+
+        // --- GEVRAAGDE EXPORTER: MYANIMELIST COMPATIBEL XML FORMAAT ---
+        function exportMyAnimeListXML() {
+            if(!app.xmlLib.length) {
+                alert("Geen items in je bibliotheek om te exporteren!");
+                return;
+            }
+
+            let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n`;
+            xml += `<!--\n  Exported from AnimeMax Pro (Local Database Edition)\n  Format: MyAnimeList XML Import/Export standard v1.0.0\n-->\n`;
+            xml += `<myanimelist>\n`;
+            
+            // Meta info
+            xml += `  <myinfo>\n`;
+            xml += `    <user_id>0</user_id>\n`;
+            xml += `    <user_name>${app.user || 'Kozjo09'}</user_name>\n`;
+            xml += `    <user_export_type>1</user_export_type>\n`;
+            xml += `    <user_total_anime>${app.xmlLib.length}</user_total_anime>\n`;
+            xml += `  </myinfo>\n`;
+
+            // Anime nodes genereren
+            app.xmlLib.forEach(item => {
+                let statusVal = "Watching"; // Default
+                if (item.status === "Watched") statusVal = "Completed";
+                if (item.status === "Dropped") statusVal = "Dropped";
+                if (item.status === "Plan to Watch") statusVal = "Plan to Watch";
+
+                xml += `  <anime>\n`;
+                xml += `    <series_animedb_id>${item.id}</series_animedb_id>\n`;
+                xml += `    <series_title><![CDATA[${item.title}]]></series_title>\n`;
+                xml += `    <series_type>TV</series_type>\n`;
+                xml += `    <series_episodes>${item.episodes || 0}</series_episodes>\n`;
+                xml += `    <my_id>0</my_id>\n`;
+                xml += `    <my_watched_episodes>${item.progress || 0}</my_watched_episodes>\n`;
+                xml += `    <my_start_date>0000-00-00</my_start_date>\n`;
+                xml += `    <my_finish_date>0000-00-00</my_finish_date>\n`;
+                xml += `    <my_score>0</my_score>\n`;
+                xml += `    <my_status>${statusVal}</my_status>\n`;
+                xml += `    <my_rewatching></my_rewatching>\n`;
+                xml += `    <my_rewatching_ep>0</my_rewatching_ep>\n`;
+                xml += `    <my_last_updated>${Math.floor(Date.now() / 1000)}</my_last_updated>\n`;
+                xml += `    <my_tags><![CDATA[]]></my_tags>\n`;
+                xml += `  </anime>\n`;
+            });
+
+            xml += `</myanimelist>\n`;
+
+            // Download triggeren
+            const blob = new Blob([xml], { type: "text/xml" });
+            const url = URL.createObjectURL(blob);
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.href = url;
+            downloadAnchor.download = `animemax_mal_export_${new Date().toISOString().slice(0,10)}.xml`;
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        // --- FILTER- EN SETTINGS LOGICA ---
         function filterCloud(status) {
             app.cloudFilter = status;
             render();
@@ -526,54 +610,8 @@
             render();
         }
 
-        // --- XML TO ANILIST SYNC FEATURE ---
-        async function syncAllXmlToAniList() {
-            const hasToken = !!localStorage.getItem('al_token');
-            if(!hasToken) {
-                alert("Je bent niet ingelogd met AniList! Ga naar het profiel en koppel je account.");
-                return;
-            }
-
-            if(!app.xmlLib.length) {
-                alert("Geen geïmporteerde XML lijst gevonden om te synchroniseren.");
-                return;
-            }
-
-            const confirmSync = confirm(`Weet je zeker dat je alle ${app.xmlLib.length} items uit je XML-bibliotheek wilt synchroniseren met je live AniList cloud-account? Dit zal de voortgang direct overschrijven.`);
-            if(!confirmSync) return;
-
-            alert("Synchronisatie is gestart! Sluit dit tabblad niet. Je krijgt een melding zodra alles is verwerkt...");
-
-            const mutationQuery = `mutation($m:Int, $status:MediaListStatus){SaveMediaListEntry(mediaId:$m, status:$status){id}}`;
-            
-            let successCount = 0;
-            let errorCount = 0;
-
-            for(let item of app.xmlLib) {
-                let aniStatus = "CURRENT"; 
-                if (item.status === "Watched") aniStatus = "COMPLETED";
-                if (item.status === "Dropped") aniStatus = "DROPPED";
-                if (item.status === "Plan to Watch") aniStatus = "PLANNING";
-
-                try {
-                    const res = await gql(mutationQuery, {m: parseInt(item.id), status: aniStatus});
-                    if(res && res.data) successCount++;
-                    else errorCount++;
-                } catch(e) {
-                    errorCount++;
-                }
-                // Rate limits omzeilen
-                await new Promise(resolve => setTimeout(resolve, 350));
-            }
-
-            alert(`Synchronisatie voltooid!\n\nSuccesvol bijgewerkt: ${successCount} anime\nMislukt of overgeslagen: ${errorCount}`);
-            nav('cloud');
-        }
-
         function saveSet() {
-            app.user = document.getElementById('set-user').value;
-            app.clientId = document.getElementById('set-client').value || '41604';
-            app.clientSecret = document.getElementById('set-secret').value || '';
+            app.user = document.getElementById('set-user').value.trim();
             app.lang = document.querySelector('input[name="lang"]:checked').value;
             app.autoSelect = document.getElementById('set-select').value;
             app.showContinue = document.getElementById('set-continue').checked;
@@ -583,8 +621,6 @@
             app.skipSeconds = parseInt(document.getElementById('set-seconds').value || '5');
 
             localStorage.setItem('amax_user', app.user);
-            localStorage.setItem('amax_client', app.clientId);
-            localStorage.setItem('amax_secret', app.clientSecret);
             localStorage.setItem('amax_lang', app.lang);
             localStorage.setItem('amax_auto_select', app.autoSelect);
             localStorage.setItem('amax_show_continue', app.showContinue);
@@ -593,15 +629,8 @@
             localStorage.setItem('amax_autoskip', app.autoSkipIntro);
             localStorage.setItem('amax_skip_seconds', app.skipSeconds);
 
-            alert("Instellingen opgeslagen!");
+            alert("Instellingen succesvol opgeslagen!");
             render();
-        }
-
-        // REDIRECT MET DE JUISTE AUTH CODE PARAMETERS
-        function redirectToAniList() {
-            const currentUrl = window.location.origin + window.location.pathname;
-            const authUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=${app.clientId}&redirect_uri=${encodeURIComponent(currentUrl)}&response_type=code`;
-            window.location.href = authUrl;
         }
 
         function liveSearch(e) {
@@ -624,30 +653,93 @@
             });
         }
 
+        // --- GEAVANCEERDE PARSER VOOR XML (MAL, HiAnime & JSON) ---
         function handleXML() {
             const file = document.getElementById('xml-input').files[0];
             if(!file) return;
             const reader = new FileReader();
             reader.onload = e => {
-                const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(e.target.result, "text/xml");
-                const folders = xmlDoc.getElementsByTagName("folder");
-                let data = [];
-                for(let folder of folders) {
-                    const statusName = folder.getElementsByTagName("name")[0].textContent;
-                    const items = folder.getElementsByTagName("item");
-                    for(let item of items) {
-                        const al = item.getElementsByTagName("al")[0].textContent;
-                        const idMatch = al.match(/anime\/(\d+)/);
-                        if(idMatch) {
-                            data.push({ id: idMatch[1], title: item.getElementsByTagName("name")[0].textContent, status: statusName });
-                        }
+                const content = e.target.result;
+                try {
+                    // 1. Proberen als JSON (onze eigen back-ups)
+                    const jsonData = JSON.parse(content);
+                    if (Array.isArray(jsonData)) {
+                        app.xmlLib = jsonData;
+                        localStorage.setItem('amax_xml', JSON.stringify(app.xmlLib));
+                        alert("JSON database succesvol geïmporteerd!");
+                        nav('library');
+                        return;
                     }
+                } catch(err) {
+                    // Geen geldige JSON, we gaan parsen als XML
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(content, "text/xml");
+                    
+                    // Controleer of het een MyAnimeList XML structuur is
+                    const malAnimeList = xmlDoc.getElementsByTagName("anime");
+                    if (malAnimeList && malAnimeList.length > 0) {
+                        let data = [];
+                        for(let animeNode of malAnimeList) {
+                            const dbId = animeNode.getElementsByTagName("series_animedb_id")[0]?.textContent;
+                            // series_title kan binnen een CDATA zitten
+                            const seriesTitleNode = animeNode.getElementsByTagName("series_title")[0];
+                            const title = seriesTitleNode ? seriesTitleNode.textContent : "Unknown Title";
+                            const watchedEps = animeNode.getElementsByTagName("my_watched_episodes")[0]?.textContent || "0";
+                            const totalEps = animeNode.getElementsByTagName("series_episodes")[0]?.textContent || "0";
+                            const myStatus = animeNode.getElementsByTagName("my_status")[0]?.textContent || "Watching";
+
+                            let statusStr = "Watching";
+                            if (myStatus.toLowerCase() === "completed" || myStatus.toLowerCase() === "completed") statusStr = "Watched";
+                            if (myStatus.toLowerCase() === "dropped") statusStr = "Dropped";
+                            if (myStatus.toLowerCase() === "plan to watch" || myStatus.toLowerCase() === "planning") statusStr = "Plan to Watch";
+
+                            if (dbId) {
+                                data.push({
+                                    id: dbId,
+                                    title: title,
+                                    status: statusStr,
+                                    progress: parseInt(watchedEps),
+                                    episodes: parseInt(totalEps)
+                                });
+                            }
+                        }
+                        app.xmlLib = data;
+                        localStorage.setItem('amax_xml', JSON.stringify(data));
+                        alert(`MyAnimeList XML succesvol geïmporteerd (${data.length} items)!`);
+                        nav('library');
+                        return;
+                    }
+
+                    // Controleer of het een HiAnime folder-item XML structuur is
+                    const folders = xmlDoc.getElementsByTagName("folder");
+                    if (folders && folders.length > 0) {
+                        let data = [];
+                        for(let folder of folders) {
+                            const statusName = folder.getElementsByTagName("name")[0].textContent;
+                            const items = folder.getElementsByTagName("item");
+                            for(let item of items) {
+                                const al = item.getElementsByTagName("al")[0].textContent;
+                                const idMatch = al.match(/anime\/(\d+)/);
+                                if(idMatch) {
+                                    data.push({ 
+                                        id: idMatch[1], 
+                                        title: item.getElementsByTagName("name")[0].textContent, 
+                                        status: statusName, 
+                                        progress: 0,
+                                        episodes: 12
+                                    });
+                                }
+                            }
+                        }
+                        app.xmlLib = data;
+                        localStorage.setItem('amax_xml', JSON.stringify(data));
+                        alert(`HiAnime XML database succesvol geïmporteerd (${data.length} items)!`);
+                        nav('library');
+                        return;
+                    }
+
+                    alert("Fout: Dit XML-bestandsformaat wordt niet ondersteund. Upload een MyAnimeList export-XML, HiAnime export-XML of een back-up.");
                 }
-                app.xmlLib = data;
-                localStorage.setItem('amax_xml', JSON.stringify(data));
-                alert("Watchlist geïmporteerd!");
-                nav('library');
             };
             reader.readAsText(file);
         }
