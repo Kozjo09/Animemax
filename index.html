@@ -19,7 +19,7 @@
         .no-scrollbar::-webkit-scrollbar { display: none; }
         iframe { width: 100%; height: 100%; border: none; }
         
-        /* Toggle Switch */
+        /* Schakelaar */
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
@@ -652,7 +652,6 @@
             const airingAt = nextAiringEpisode.airingAt; // Unix timestamp
             const episodeNum = nextAiringEpisode.episode;
 
-            // Formatteer de exacte datum en tijd lokaal
             const localDate = new Date(airingAt * 1000);
             const formattedDateStr = localDate.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
             const formattedTimeStr = localDate.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
@@ -662,7 +661,7 @@
                 const difference = airingAt - nowSec;
 
                 if (difference <= 0) {
-                    countdownText.innerHTML = `<span class="text-emerald-400 font-black uppercase">Episode ${episodeNum} is zojuist uitgebracht!</span>`;
+                    countdownText.innerHTML = `<span class="text-emerald-400 font-black uppercase">Aflevering ${episodeNum} is zojuist uitgebracht!</span>`;
                     clearInterval(countdownInterval);
                     return;
                 }
@@ -707,7 +706,8 @@
 
                 main.innerHTML = `
                     <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
+                        <!-- Beveiligd iframe met sandbox om popups en redirects van megaplay.buzz te blokkeren -->
+                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin allow-presentation"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
                     
@@ -780,7 +780,6 @@
                         const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
                         saveRecent(app.id, t, coverUrl, app.ep);
 
-                        // Initialiseer de live afteltimer
                         setupAiringCountdown(m.nextAiringEpisode);
 
                         let tEps = m.episodes || 12; let aEps = tEps;
@@ -985,7 +984,7 @@
                     }
                 });
 
-                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden (TIME_DESC vereist een array wrapper in AniList GraphQL)
+                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden
                 const recentGrid = document.getElementById('recently-updated-grid');
                 const currentTimeSec = Math.floor(Date.now() / 1000);
 
@@ -1173,4 +1172,5 @@
         };
     </script>
 </body>
-    </html>
+</html>
+
