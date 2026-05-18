@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- Voorkomt 403 Forbidden fouten bij het laden van externe AniList cover afbeeldingen -->
+    <meta name="referrer" content="no-referrer">
     <title>AnimeMax Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Officiële Supabase Browser Client SDK -->
@@ -19,7 +21,7 @@
         .no-scrollbar::-webkit-scrollbar { display: none; }
         iframe { width: 100%; height: 100%; border: none; }
         
-        /* Schakelaar */
+        /* Toggle Switch */
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
         .toggle-checkbox:checked + .toggle-bg .toggle-dot { transform: translateX(100%); background-color: #000; }
         
@@ -505,7 +507,7 @@
                         grid.innerHTML += `
                             <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
                                 <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5 relative">
-                                    <img src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                                    <img referrerpolicy="no-referrer" src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
                                     <span class="absolute bottom-2 left-2 bg-black/80 text-[8px] font-black uppercase text-zinc-300 px-1.5 py-0.5 rounded">${m.format || 'TV'}</span>
                                 </div>
                                 <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${t}</p>
@@ -687,6 +689,72 @@
             countdownInterval = setInterval(updateTimer, 1000);
         }
 
+        // --- AUTONEXT EVENT LISTENER & TRIGGERS (DE FIX) ---
+        window.addEventListener('message', function(event) {
+            try {
+                const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                if (!data) return;
+
+                const eventName = data.event || data.method || (data.value && data.value.event);
+                
+                if (eventName === 'timeupdate' || eventName === 'timeUpdate') {
+                    const seconds = data.value?.seconds || data.data?.seconds || data.seconds || data.value?.time || data.time;
+                    const duration = data.value?.duration || data.data?.duration || data.duration;
+                    
+                    if (seconds !== undefined) {
+                        currentPlaybackTime = parseFloat(seconds);
+                        if (duration !== undefined) {
+                            currentDuration = parseFloat(duration);
+                        }
+                        
+                        // Live UI update
+                        const timeText = document.getElementById('playback-time-text');
+                        const percentageText = document.getElementById('playback-progress-percentage');
+                        if (timeText) {
+                            timeText.innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
+                        }
+                        if (percentageText && currentDuration > 0) {
+                            const pct = Math.round((currentPlaybackTime / currentDuration) * 100);
+                            percentageText.innerText = `${pct}%`;
+                        }
+                    }
+                }
+                
+                // Activeer auto-next wanneer de video eindigt of de absolute laatste seconden raakt
+                const isEnded = eventName === 'ended' || eventName === 'onVideoEnded' || eventName === 'complete';
+                const isNearEnd = (currentDuration > 10 && currentPlaybackTime >= currentDuration - 2.5);
+
+                if (isEnded || isNearEnd) {
+                    if (window.autoNextTriggered) return;
+                    window.autoNextTriggered = true;
+                    // Voorkom dubbele loops door een cooldown
+                    setTimeout(() => { window.autoNextTriggered = false; }, 8000);
+
+                    if (app.autoNext) {
+                        window.playNextEpisode();
+                    }
+                }
+            } catch (e) {
+                // Veilig negeren van postMessages van externe partijen
+            }
+        });
+
+        // Start de volgende aflevering en synchroniseert dit
+        window.playNextEpisode = function() {
+            const loc = app.xmlLib.find(i => i && i.id == app.id) || app.recent.find(i => i && i.id == app.id);
+            const totalEps = loc ? (loc.episodes || 12) : 12;
+            const nextEp = parseInt(app.ep) + 1;
+
+            if (nextEp <= totalEps) {
+                window.showToast(`Aflevering afgerond! Volgende aflevering (${nextEp}) start nu...`);
+                window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', nextEp, totalEps, loc ? loc.coverImage : '');
+                nav('watch', { id: app.id, ep: nextEp });
+            } else {
+                window.showToast("🏆 Gefeliciteerd! Je hebt deze anime volledig afgerond.");
+                window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', totalEps, totalEps, loc ? loc.coverImage : '', 'Watched');
+            }
+        };
+
         // --- RENDER HOOFDPAGINA EN STRUCTUUR ---
         function render() {
             if (!sessionData) return showLoginPage('login');
@@ -706,7 +774,7 @@
 
                 main.innerHTML = `
                     <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <!-- Beveiligd iframe met sandbox om popups en redirects van megaplay.buzz te blokkeren -->
+                        <!-- Beveiligd iframe met sandbox om popups en redirects te blokkeren -->
                         <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin allow-presentation"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
@@ -727,6 +795,10 @@
                         <div class="flex gap-2">
                             <button onclick="checkAudioAvailabilityAndPlay('sub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
                             <button onclick="checkAudioAvailabilityAndPlay('dub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
+                            <!-- Directe handmatige Volgende Ep knop onder de player -->
+                            <button onclick="playNextEpisode()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/5 transition flex items-center gap-1.5" title="Direct naar de volgende aflevering gaan">
+                                <i class="fa-solid fa-forward"></i> Volgende Ep
+                            </button>
                         </div>
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" id="toggle-autonext" onchange="toggleAutoNext()" class="toggle-checkbox hidden" ${app.autoNext ? 'checked' : ''}>
@@ -819,7 +891,7 @@
                     grid.innerHTML += `
                         <div onclick="nav('watch', {id:'${r.id}', ep:${r.ep}})" class="group text-left relative cursor-pointer">
                             <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2 shadow-lg">
-                                <img src="${r.img || FALLBACK_COVER}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover opacity-45 group-hover:scale-105 transition-transform duration-500">
+                                <img referrerpolicy="no-referrer" src="${r.img || FALLBACK_COVER}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover opacity-45 group-hover:scale-105 transition-transform duration-500">
                                 <span class="absolute top-2 left-2 bg-black/85 px-1.5 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</span>
                                 ${p > 0 ? `<div class="absolute bottom-0 left-0 w-full h-1 bg-white/10"><div class="h-full bg-accent" style="width: ${p}%"></div></div>` : ''}
                             </div>
@@ -970,21 +1042,21 @@
                     </div>`;
 
                 const grid = document.getElementById('h-grid');
-                STATIC_TRENDING.forEach(m => grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img src="${m.img}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${m.title}</p></button>`);
+                STATIC_TRENDING.forEach(m => grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img referrerpolicy="no-referrer" src="${m.img}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${m.title}</p></button>`);
                 
-                // Haal trending op
+                // Haal trending op van AniList
                 gql(`query{Page(perPage:12){media(type:ANIME,sort:TRENDING_DESC){id title{romaji english}coverImage{extraLarge large medium}}}}`).then(res => {
                     if (res && res.data && res.data.Page.media) {
                         grid.innerHTML = ''; 
                         res.data.Page.media.forEach(m => {
                             const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
                             const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
-                            grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${t}</p></button>`;
+                            grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img referrerpolicy="no-referrer" src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${t}</p></button>`;
                         });
                     }
                 });
 
-                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden
+                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden (TIME_DESC)
                 const recentGrid = document.getElementById('recently-updated-grid');
                 const currentTimeSec = Math.floor(Date.now() / 1000);
 
@@ -1036,7 +1108,7 @@
                             recentGrid.innerHTML += `
                                 <button onclick="nav('watch', {id:'${m.id}', ep:${item.episode}})" class="text-left group animate-fade-in">
                                     <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5 relative">
-                                        <img src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
+                                        <img referrerpolicy="no-referrer" src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
                                         
                                         <!-- Groene badge met de exacte nieuwe live uitgezonden aflevering -->
                                         <div class="absolute bottom-2 left-2 flex items-center gap-1 bg-[#cae962]/95 text-black text-[8px] font-black uppercase px-2 py-0.5 rounded shadow-lg">
@@ -1070,7 +1142,7 @@
                 container.innerHTML += `
                     <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
                         <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5 relative">
-                            <img src="${m.img}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
+                            <img referrerpolicy="no-referrer" src="${m.img}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
                             <div class="absolute bottom-2 left-2 flex items-center gap-1 bg-[#cae962]/95 text-black text-[8px] font-black uppercase px-2 py-0.5 rounded shadow-lg">
                                 <i class="fa-solid fa-closed-captioning text-[9px]"></i> EP 1
                             </div>
@@ -1115,7 +1187,7 @@
                 grid.innerHTML += `
                     <div id="lib-card-${item.id}" data-id="${item.id}" class="lazy-card card p-4 flex flex-col sm:flex-row justify-between gap-4 border border-white/5 animate-fade-in">
                         <div class="flex gap-4 items-center flex-1 min-w-0">
-                            <img id="img-${item.id}" src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 flex-shrink-0">
+                            <img id="img-${item.id}" referrerpolicy="no-referrer" src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 flex-shrink-0">
                             <div class="truncate pr-4 flex-1">
                                 <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
                                 <div class="flex items-center gap-2">
@@ -1172,5 +1244,4 @@
         };
     </script>
 </body>
-</html>
-
+    </html>
