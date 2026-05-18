@@ -103,9 +103,12 @@
         let dubTimeout = null;
         let lazyObserver = null;
         let searchTimeout = null;
+        let countdownInterval = null;
 
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', libraryFilter: 'All',
+            librarySearchQuery: '', libraryFilterGenre: 'All', libraryFilterType: 'All',
+            searchGenre: '', searchType: '', searchStatus: '', searchSeason: '', searchYear: '',
             user: 'Gebruiker', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 85, 
             defaultAudio: 'sub', recent: [], xmlLib: [], autoDubFallback: true
         };
@@ -122,6 +125,13 @@
             { id: 172019, title: "Dr. Stone: Science Future", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx172019-9uR6zG1yY2a5.png" },
             { id: 101280, title: "That Time I Got Reincarnated as a Slime", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101280-9tH8kL1vX2b5.png" }
         ];
+
+        const GENRE_LIST = [
+            "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
+            "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Supernatural", "Thriller"
+        ];
+
+        const FALLBACK_COVER = "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=400";
 
         // --- TOASTS & MODALS ---
         window.showToast = function(message, type = 'success') {
@@ -307,11 +317,9 @@
             return null;
         }
 
-        // --- EXTRA ONTBREKENDE FUNCTIES TOEGEVOEGD ---
-        
         window.saveRecent = function(id, title, img, ep) {
             let rec = app.recent.filter(i => i && i.id != id);
-            rec.unshift({ id, title, img, ep, time: currentPlaybackTime || 0, duration: currentDuration || 0, ts: Date.now() });
+            rec.unshift({ id, title, img: img || FALLBACK_COVER, ep, time: currentPlaybackTime || 0, duration: currentDuration || 0, ts: Date.now() });
             app.recent = rec.slice(0, 12);
             saveCloudDataDebounced();
         };
@@ -335,7 +343,6 @@
             currentPlaybackTime += app.skipSeconds;
             const player = document.getElementById('player');
             if (player && player.contentWindow) {
-                // Afhankelijk van de speler, sturen we een generic seek command
                 player.contentWindow.postMessage(JSON.stringify({ event: "command", command: "seek", value: currentPlaybackTime }), "*");
                 window.showToast(`Geskipt (+${app.skipSeconds}s)`);
             }
@@ -425,43 +432,99 @@
             reader.readAsText(file);
         };
 
-        window.liveSearch = function(e) {
-            const q = e.target.value.trim();
+        // --- FILTERS & DYNAMISCH ZOEKEN ---
+        window.updateSearchFiltersAndQuery = function() {
+            const q = document.getElementById('live-search').value.trim();
             app.searchQuery = q;
+            app.searchGenre = document.getElementById('filter-genre').value;
+            app.searchType = document.getElementById('filter-type').value;
+            app.searchStatus = document.getElementById('filter-status').value;
+            app.searchSeason = document.getElementById('filter-season').value;
+            app.searchYear = document.getElementById('filter-year').value;
+
             clearTimeout(searchTimeout);
             const grid = document.getElementById('search-grid');
-            if (q.length < 3) {
-                grid.innerHTML = '<p class="col-span-2 sm:col-span-6 text-center text-zinc-500 text-xs mt-4">Typ 3 of meer letters...</p>'; return;
-            }
-            grid.innerHTML = '<div class="col-span-2 sm:col-span-6 text-center text-accent text-xs mt-4"><i class="fa-solid fa-spinner animate-spin"></i> Zoeken...</div>';
+            grid.innerHTML = '<div class="col-span-2 sm:col-span-6 text-center text-accent text-xs mt-4"><i class="fa-solid fa-spinner animate-spin"></i> Zoeken en filteren...</div>';
             
             searchTimeout = setTimeout(async () => {
-                const res = await gql(`query($s:String){Page(perPage:18){media(type:ANIME,search:$s,sort:POPULARITY_DESC){id title{romaji english}coverImage{large}}}}`, { s: q });
+                let variables = {};
+                let filterGqlString = `type: ANIME, sort: POPULARITY_DESC`;
+
+                if (q.length >= 2) {
+                    variables.search = q;
+                    filterGqlString += `, search: $search`;
+                }
+                if (app.searchGenre && app.searchGenre !== "All") {
+                    variables.genre = app.searchGenre;
+                    filterGqlString += `, genre: $genre`;
+                }
+                if (app.searchType && app.searchType !== "All") {
+                    variables.format = app.searchType;
+                    filterGqlString += `, format: $format`;
+                }
+                if (app.searchStatus && app.searchStatus !== "All") {
+                    variables.status = app.searchStatus;
+                    filterGqlString += `, status: $status`;
+                }
+                if (app.searchSeason && app.searchSeason !== "All") {
+                    variables.season = app.searchSeason;
+                    filterGqlString += `, season: $season`;
+                }
+                if (app.searchYear && app.searchYear !== "All") {
+                    variables.seasonYear = parseInt(app.searchYear);
+                    filterGqlString += `, seasonYear: $seasonYear`;
+                }
+
+                const dynamicQuery = `
+                    query(${q.length >= 2 ? '$search: String, ' : ''}${app.searchGenre && app.searchGenre !== "All" ? '$genre: String, ' : ''}${app.searchType && app.searchType !== "All" ? '$format: MediaFormat, ' : ''}${app.searchStatus && app.searchStatus !== "All" ? '$status: MediaStatus, ' : ''}${app.searchSeason && app.searchSeason !== "All" ? '$season: MediaSeason, ' : ''}${app.searchYear && app.searchYear !== "All" ? '$seasonYear: Int' : ''}) {
+                        Page(perPage: 24) {
+                            media(${filterGqlString}) {
+                                id
+                                title {
+                                    romaji
+                                    english
+                                }
+                                coverImage {
+                                    extraLarge
+                                    large
+                                    medium
+                                }
+                                format
+                                seasonYear
+                            }
+                        }
+                    }
+                `;
+
+                const res = await gql(dynamicQuery, variables);
                 grid.innerHTML = '';
                 if (res && res.data && res.data.Page.media.length) {
                     res.data.Page.media.forEach(m => {
                         const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                        const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
                         grid.innerHTML += `
                             <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
-                                <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5">
-                                    <img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                                <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5 relative">
+                                    <img src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+                                    <span class="absolute bottom-2 left-2 bg-black/80 text-[8px] font-black uppercase text-zinc-300 px-1.5 py-0.5 rounded">${m.format || 'TV'}</span>
                                 </div>
                                 <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${t}</p>
                             </button>`;
                     });
                 } else {
-                    grid.innerHTML = '<p class="col-span-2 sm:col-span-6 text-center text-zinc-500 text-xs mt-4">Niets gevonden.</p>';
+                    grid.innerHTML = '<p class="col-span-2 sm:col-span-6 text-center text-zinc-500 text-xs mt-4">Geen resultaten gevonden voor deze filters.</p>';
                 }
-            }, 600);
+            }, 500);
         };
 
         window.toggleAutoNext = function() { app.autoNext = document.getElementById('toggle-autonext').checked; saveCloudDataDebounced(); };
 
-        // --- CORE FUNCTIES ---
+        // --- CORE NAVIGATIE ---
         window.nav = function(view, params = {}) {
             if (!sessionData) return showLoginPage('login');
             if (app.view === 'watch' && app.id) saveCurrentVideoTime();
             clearInterval(saveInterval); clearTimeout(dubTimeout);
+            clearInterval(countdownInterval);
             if (lazyObserver) lazyObserver.disconnect();
 
             app.view = view; app.id = params.id || null; app.ep = params.ep || 1;
@@ -533,12 +596,24 @@
             if (!app.user) return window.showToast("Stel eerst een gebruikersnaam in!", "error");
             window.showToast("Bezig met ophalen...");
             try {
-                const res = await gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{large}episodes}}}}}`, {u: app.user});
+                const res = await gql(`query($u:String){MediaListCollection(userName:$u,type:ANIME){lists{name entries{progress media{id title{romaji english}coverImage{extraLarge large medium}episodes genres format}}}}}`, {u: app.user});
                 if (res && res.data && res.data.MediaListCollection) {
                     let imp = [];
                     res.data.MediaListCollection.lists.forEach(l => {
                         let st = "Watching"; if(l.name.toLowerCase().includes("completed")) st = "Watched"; if(l.name.toLowerCase().includes("dropped")) st = "Dropped"; if(l.name.toLowerCase().includes("plan")) st = "Plan to Watch";
-                        l.entries.forEach(e => imp.push({ id: e.media.id.toString(), title: e.media.title.english || e.media.title.romaji, status: st, progress: parseInt(e.progress||0), episodes: parseInt(e.media.episodes||12), coverImage: e.media.coverImage.large }));
+                        l.entries.forEach(e => {
+                            const cUrl = e.media.coverImage ? (e.media.coverImage.extraLarge || e.media.coverImage.large || e.media.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
+                            imp.push({ 
+                                id: e.media.id.toString(), 
+                                title: e.media.title.english || e.media.title.romaji, 
+                                status: st, 
+                                progress: parseInt(e.progress||0), 
+                                episodes: parseInt(e.media.episodes||12), 
+                                coverImage: cUrl,
+                                genres: e.media.genres || [],
+                                format: e.media.format || "TV"
+                            });
+                        });
                     });
                     app.xmlLib = mergeWatchlists(app.xmlLib, imp); saveCloudData();
                     window.showToast(`${imp.length} items samengevoegd!`); nav('library');
@@ -552,8 +627,68 @@
         };
 
         window.filterXml = function(status) { app.libraryFilter = status; renderLibraryGrid(); };
+        
+        window.updateLibrarySearch = function() {
+            app.librarySearchQuery = document.getElementById('lib-search-input').value.toLowerCase().trim();
+            app.libraryFilterGenre = document.getElementById('lib-filter-genre').value;
+            app.libraryFilterType = document.getElementById('lib-filter-type').value;
+            renderLibraryGrid();
+        };
 
-        // --- RENDER LOGIC ---
+        // --- AIRING COUNTDOWN LOGIC ---
+        function setupAiringCountdown(nextAiringEpisode) {
+            clearInterval(countdownInterval);
+            const countdownContainer = document.getElementById('airing-countdown-container');
+            const countdownText = document.getElementById('airing-countdown-text');
+            
+            if (!countdownContainer || !countdownText) return;
+
+            if (!nextAiringEpisode) {
+                countdownContainer.classList.add('hidden');
+                return;
+            }
+
+            countdownContainer.classList.remove('hidden');
+            const airingAt = nextAiringEpisode.airingAt; // Unix timestamp
+            const episodeNum = nextAiringEpisode.episode;
+
+            // Formatteer de exacte datum en tijd lokaal
+            const localDate = new Date(airingAt * 1000);
+            const formattedDateStr = localDate.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+            const formattedTimeStr = localDate.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+
+            const updateTimer = () => {
+                const nowSec = Math.floor(Date.now() / 1000);
+                const difference = airingAt - nowSec;
+
+                if (difference <= 0) {
+                    countdownText.innerHTML = `<span class="text-emerald-400 font-black uppercase">Episode ${episodeNum} is zojuist uitgebracht!</span>`;
+                    clearInterval(countdownInterval);
+                    return;
+                }
+
+                const d = Math.floor(difference / (3600 * 24));
+                const h = Math.floor((difference % (3600 * 24)) / 3600);
+                const m = Math.floor((difference % 3600) / 60);
+                const s = difference % 60;
+
+                let countdownStr = "";
+                if (d > 0) countdownStr += `${d}d `;
+                countdownStr += `${h}u ${m}m ${s}s`;
+
+                countdownText.innerHTML = `
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between w-full gap-2">
+                        <span>Volgende <span class="accent font-bold">Aflevering ${episodeNum}</span> over: <span class="text-white font-mono font-bold bg-white/5 px-2.5 py-1 rounded border border-white/5 ml-1 inline-block">${countdownStr}</span></span>
+                        <span class="text-[9px] text-zinc-500 uppercase flex items-center gap-1.5"><i class="fa-solid fa-calendar-days text-zinc-600"></i> ${formattedDateStr} om ${formattedTimeStr} uur</span>
+                    </div>
+                `;
+            };
+
+            updateTimer();
+            countdownInterval = setInterval(updateTimer, 1000);
+        }
+
+        // --- RENDER HOOFDPAGINA EN STRUCTUUR ---
         function render() {
             if (!sessionData) return showLoginPage('login');
             const main = document.getElementById('content'); if(!main) return;
@@ -575,10 +710,19 @@
                         <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
+                    
+                    <!-- Live afspeeltijd indicator -->
                     <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] font-bold">
                         <span class="flex items-center gap-1.5 text-zinc-500"><i class="fa-regular fa-clock accent"></i> POSITIE: <span id="playback-time-text" class="text-white">0:00 / 0:00</span></span>
                         <span id="playback-progress-percentage" class="accent">0%</span>
                     </div>
+
+                    <!-- Volgende Aflevering Live Afteller -->
+                    <div id="airing-countdown-container" class="bg-[#121212] border-x border-b border-white/10 px-4 py-3 text-xs font-black text-zinc-400 hidden flex items-center gap-2 font-sans tracking-wide">
+                        <i class="fa-solid fa-broadcast-tower text-rose-500 animate-pulse text-sm"></i>
+                        <div id="airing-countdown-text" class="flex-1">Zendtijd bepalen...</div>
+                    </div>
+
                     <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4">
                         <div class="flex gap-2">
                             <button onclick="checkAudioAvailabilityAndPlay('sub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
@@ -602,11 +746,12 @@
                             <option value="Watching" ${stat==='Watching'?'selected':''}>Watching</option>
                             <option value="Watched" ${stat==='Watched' || stat==='Completed'?'selected':''}>Completed</option>
                             <option value="Dropped" ${stat==='Dropped'?'selected':''}>Dropped</option>
+                            <option value="Plan to Watch" ${stat==='Plan to Watch'?'selected':''}>Plan to Watch</option>
                         </select>
                     </div>
 
                     <div id="ep-grid" class="grid grid-cols-5 sm:grid-cols-10 gap-2 mb-8"></div>
-                    <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4">Gerelateerd</h2>
+                    <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4 font-sans tracking-widest">Gerelateerd</h2>
                     <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>`;
 
                 const grid = document.getElementById('ep-grid');
@@ -626,12 +771,17 @@
                 startDubCheckTimer();
 
                 setTimeout(() => {
-                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode airingAt}title{romaji english}episodes coverImage{extraLarge large medium}genres format relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                         if (!res || !res.data) return;
                         const m = res.data.Media;
                         const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
                         document.getElementById('w-title').innerText = t;
-                        saveRecent(app.id, t, m.coverImage.large, app.ep);
+                        
+                        const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
+                        saveRecent(app.id, t, coverUrl, app.ep);
+
+                        // Initialiseer de live afteltimer
+                        setupAiringCountdown(m.nextAiringEpisode);
 
                         let tEps = m.episodes || 12; let aEps = tEps;
                         if (m.status === 'RELEASING' && m.nextAiringEpisode) aEps = m.nextAiringEpisode.episode - 1;
@@ -640,7 +790,15 @@
                         for(let i = 1; i <= tEps; i++) {
                             let c = i == app.ep ? "bg-accent text-black" : (i <= prog ? "bg-emerald-800 text-emerald-100" : (i <= aEps ? "bg-zinc-700" : "bg-[#0b0b0b] text-zinc-700"));
                             let dis = i > aEps ? "disabled" : "";
-                            grid.innerHTML += `<button onclick="autoUpdateProgressOnEpClick('${app.id}', '${t.replace(/'/g, "\\'")}', ${i}, ${tEps}, '${m.coverImage.large}'); nav('watch', {id:${app.id}, ep:${i}})" ${dis} class="aspect-square rounded-xl font-black text-xs ${c}">${i}</button>`;
+                            grid.innerHTML += `<button onclick="autoUpdateProgressOnEpClick('${app.id}', '${t.replace(/'/g, "\\'")}', ${i}, ${tEps}, '${coverUrl}'); nav('watch', {id:${app.id}, ep:${i}})" ${dis} class="aspect-square rounded-xl font-black text-xs ${c}">${i}</button>`;
+                        }
+
+                        const libraryItem = app.xmlLib.find(item => item && item.id.toString() === app.id.toString());
+                        if (libraryItem) {
+                            libraryItem.genres = m.genres || [];
+                            libraryItem.format = m.format || "TV";
+                            libraryItem.coverImage = coverUrl;
+                            saveCloudDataDebounced();
                         }
 
                         const rGrid = document.getElementById('rel-grid'); rGrid.innerHTML = '';
@@ -662,7 +820,7 @@
                     grid.innerHTML += `
                         <div onclick="nav('watch', {id:'${r.id}', ep:${r.ep}})" class="group text-left relative cursor-pointer">
                             <div class="aspect-video rounded-xl bg-zinc-900 border border-white/5 relative overflow-hidden mb-2 shadow-lg">
-                                <img src="${r.img}" class="w-full h-full object-cover opacity-45 group-hover:scale-105 transition-transform duration-500">
+                                <img src="${r.img || FALLBACK_COVER}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover opacity-45 group-hover:scale-105 transition-transform duration-500">
                                 <span class="absolute top-2 left-2 bg-black/85 px-1.5 py-0.5 rounded text-[8px] font-black accent">EP ${r.ep}</span>
                                 ${p > 0 ? `<div class="absolute bottom-0 left-0 w-full h-1 bg-white/10"><div class="h-full bg-accent" style="width: ${p}%"></div></div>` : ''}
                             </div>
@@ -707,7 +865,7 @@
                             </div>
                         </div>
 
-                        <div class="card p-8 bg-accent/5 text-center"><h2 class="font-black uppercase mb-2 text-sm accent">AniList Import</h2>
+                        <div class="card p-8 bg-accent/5 text-center"><h2 class="font-black uppercase mb-2 text-sm accent">ANILIST IMPORT</h2>
                         <button onclick="importAndMergeAniListCloud()" class="w-full bg-accent text-black font-black py-4 rounded-xl text-[10px] uppercase"><i class="fa-solid fa-cloud-arrow-down"></i> Nu Importeren</button></div>
 
                         <div class="card p-8 border-green-500/20 text-center"><h2 class="font-black uppercase mb-2 text-sm">Download XML Back-up</h2>
@@ -720,7 +878,27 @@
             }
             else if (app.view === 'library') {
                 main.innerHTML = `
-                    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-black accent uppercase italic">Bibliotheek</h2><span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span></div>
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-2"><h2 class="text-xl font-black accent uppercase italic">Bibliotheek</h2><span class="text-[10px] text-zinc-500 uppercase font-black">${app.xmlLib.length} items</span></div>
+                    
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 bg-[#121212] p-4 rounded-2xl border border-white/5">
+                        <div class="relative">
+                            <span class="absolute left-3 top-2.5 text-zinc-500 text-xs"><i class="fa-solid fa-search"></i></span>
+                            <input type="text" id="lib-search-input" onkeyup="updateLibrarySearch()" placeholder="Zoek in bibliotheek..." class="w-full bg-black border border-white/10 pl-8 pr-3 py-2 rounded-xl text-xs text-white outline-none focus:border-accent">
+                        </div>
+                        <select id="lib-filter-genre" onchange="updateLibrarySearch()" class="bg-black border border-white/10 px-3 py-2 rounded-xl text-xs text-zinc-400 outline-none">
+                            <option value="All">Select Genre</option>
+                            ${GENRE_LIST.map(g => `<option value="${g}">${g}</option>`).join('')}
+                        </select>
+                        <select id="lib-filter-type" onchange="updateLibrarySearch()" class="bg-black border border-white/10 px-3 py-2 rounded-xl text-xs text-zinc-400 outline-none">
+                            <option value="All">Select Type</option>
+                            <option value="TV">TV</option>
+                            <option value="MOVIE">Movie</option>
+                            <option value="OVA">OVA</option>
+                            <option value="ONA">ONA</option>
+                            <option value="SPECIAL">Special</option>
+                        </select>
+                    </div>
+
                     <div class="flex gap-2 overflow-x-auto no-scrollbar pb-4 mb-4">
                         ${['All', 'Watching', 'Watched', 'Dropped', 'Plan to Watch'].map(s => `<button onclick="filterXml('${s}')" class="flex-shrink-0 px-4 py-2 rounded-full text-[9px] font-black uppercase ${app.libraryFilter === s ? 'bg-accent text-black' : 'bg-zinc-900 text-zinc-400 border border-white/5'}">${s}</button>`).join('')}
                     </div>
@@ -729,46 +907,226 @@
             }
             else if (app.view === 'search') {
                 main.innerHTML = `
-                    <div class="max-w-md mx-auto mb-10"><input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="liveSearch(event)" class="w-full bg-zinc-900 border border-white/10 p-4 rounded-xl outline-none focus:border-accent text-white font-bold text-sm"></div>
-                    <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>`;
+                    <div class="max-w-4xl mx-auto space-y-4 mb-8">
+                        <h2 class="text-xl font-black italic uppercase tracking-tighter">Filter</h2>
+                        
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                            <select id="filter-genre" onchange="updateSearchFiltersAndQuery()" class="bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs text-zinc-300 font-bold outline-none">
+                                <option value="All">Select genre</option>
+                                ${GENRE_LIST.map(g => `<option value="${g}" ${app.searchGenre === g ? 'selected':''}>${g}</option>`).join('')}
+                            </select>
+                            
+                            <select id="filter-type" onchange="updateSearchFiltersAndQuery()" class="bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs text-zinc-300 font-bold outline-none">
+                                <option value="All">Select type</option>
+                                <option value="TV" ${app.searchType === "TV" ? 'selected':''}>TV</option>
+                                <option value="MOVIE" ${app.searchType === "MOVIE" ? 'selected':''}>Movie</option>
+                                <option value="OVA" ${app.searchType === "OVA" ? 'selected':''}>OVA</option>
+                                <option value="ONA" ${app.searchType === "ONA" ? 'selected':''}>ONA</option>
+                                <option value="SPECIAL" ${app.searchType === "SPECIAL" ? 'selected':''}>Special</option>
+                            </select>
+
+                            <select id="filter-status" onchange="updateSearchFiltersAndQuery()" class="bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs text-zinc-300 font-bold outline-none">
+                                <option value="All">Select status</option>
+                                <option value="FINISHED" ${app.searchStatus === "FINISHED" ? 'selected':''}>Finished</option>
+                                <option value="RELEASING" ${app.searchStatus === "RELEASING" ? 'selected':''}>Releasing</option>
+                                <option value="NOT_YET_RELEASED" ${app.searchStatus === "NOT_YET_RELEASED" ? 'selected':''}>Upcoming</option>
+                            </select>
+
+                            <select id="filter-season" onchange="updateSearchFiltersAndQuery()" class="bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs text-zinc-300 font-bold outline-none">
+                                <option value="All">Select season</option>
+                                <option value="WINTER" ${app.searchSeason === "WINTER" ? 'selected':''}>Winter</option>
+                                <option value="SPRING" ${app.searchSeason === "SPRING" ? 'selected':''}>Spring</option>
+                                <option value="SUMMER" ${app.searchSeason === "SUMMER" ? 'selected':''}>Summer</option>
+                                <option value="FALL" ${app.searchSeason === "FALL" ? 'selected':''}>Fall</option>
+                            </select>
+
+                            <select id="filter-year" onchange="updateSearchFiltersAndQuery()" class="bg-zinc-900 border border-white/10 p-3 rounded-xl text-xs text-zinc-300 font-bold outline-none">
+                                <option value="All">Select year</option>
+                                ${Array.from({length: 15}, (_, i) => new Date().getFullYear() - i + 1).map(y => `<option value="${y}" ${app.searchYear == y ? 'selected':''}>${y}</option>`).join('')}
+                            </select>
+                        </div>
+
+                        <div class="relative">
+                            <input type="text" id="live-search" placeholder="Zoek op titel..." onkeyup="updateSearchFiltersAndQuery()" class="w-full bg-zinc-900/60 border border-white/10 p-4 pl-12 rounded-xl outline-none focus:border-accent text-white font-bold text-sm">
+                            <span class="absolute left-4 top-4.5 text-zinc-500"><i class="fa-solid fa-search"></i></span>
+                        </div>
+                    </div>
+                    <div id="search-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3">
+                        <p class="col-span-full text-center text-zinc-600 text-xs mt-6">Pas de filters hierboven aan of typ een titel om direct te zoeken...</p>
+                    </div>`;
             }
             else {
-                main.innerHTML = `<h2 class="text-xs font-black uppercase tracking-widest mb-6">Trending Now</h2><div id="h-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3"></div>`;
+                // HOME VIEW MET TRENDING NOW & RECENTLY UPDATED SECTIES (AIRING SCHEDULES)
+                main.innerHTML = `
+                    <h2 class="text-xs font-black uppercase tracking-widest mb-6"><i class="fa-solid fa-fire accent"></i> Trending Now</h2>
+                    <div id="h-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-10"></div>
+                    
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                            <i class="fa-solid fa-rotate-right text-accent animate-spin-slow"></i> Recently Updated Episodes
+                        </h2>
+                    </div>
+                    <div id="recently-updated-grid" class="grid grid-cols-2 sm:grid-cols-6 gap-3">
+                        <div class="col-span-full text-center text-xs py-10 opacity-30"><i class="fa-solid fa-circle-notch animate-spin"></i> Live uitzendingen ophalen...</div>
+                    </div>`;
+
                 const grid = document.getElementById('h-grid');
-                STATIC_TRENDING.forEach(m => grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img src="${m.img}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${m.title}</p></button>`);
+                STATIC_TRENDING.forEach(m => grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img src="${m.img}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${m.title}</p></button>`);
                 
-                gql(`query{Page(perPage:24){media(type:ANIME,sort:TRENDING_DESC){id title{romaji english}coverImage{large}}}}`).then(res => {
+                // Haal trending op
+                gql(`query{Page(perPage:12){media(type:ANIME,sort:TRENDING_DESC){id title{romaji english}coverImage{extraLarge large medium}}}}`).then(res => {
                     if (res && res.data && res.data.Page.media) {
                         grid.innerHTML = ''; 
                         res.data.Page.media.forEach(m => {
                             const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
-                            grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-toast"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img src="${m.coverImage.large}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${t}</p></button>`;
+                            const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
+                            grid.innerHTML += `<button onclick="nav('watch', {id:'${m.id}'})" class="text-left group"><div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5"><img src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"></div><p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${t}</p></button>`;
                         });
                     }
+                });
+
+                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden (TIME_DESC vereist een array wrapper in AniList GraphQL)
+                const recentGrid = document.getElementById('recently-updated-grid');
+                const currentTimeSec = Math.floor(Date.now() / 1000);
+
+                gql(`query($time: Int) {
+                    Page(page: 1, perPage: 32) {
+                        airingSchedules(airingAt_lessThan: $time, sort: [TIME_DESC]) {
+                            episode
+                            media {
+                                id
+                                title {
+                                    romaji
+                                    english
+                                }
+                                coverImage {
+                                    extraLarge
+                                    large
+                                    medium
+                                }
+                                status
+                                format
+                            }
+                        }
+                    }
+                }`, { time: currentTimeSec }).then(res => {
+                    if (res && res.data && res.data.Page.airingSchedules) {
+                        recentGrid.innerHTML = '';
+                        const schedules = res.data.Page.airingSchedules;
+
+                        const seenIds = new Set();
+                        let count = 0;
+
+                        schedules.forEach(item => {
+                            if (count >= 12) return;
+                            const m = item.media;
+                            if (!m || seenIds.has(m.id)) return;
+                            seenIds.add(m.id);
+                            count++;
+
+                            const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
+                            const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
+                            
+                            // Synchroniseer en sla de opgeloste cover-afbeelding direct op in de bibliotheek-structuren
+                            let libItem = app.xmlLib.find(x => x && x.id.toString() === m.id.toString());
+                            if (libItem && (!libItem.coverImage || libItem.coverImage === FALLBACK_COVER)) {
+                                libItem.coverImage = coverUrl;
+                                saveCloudDataDebounced();
+                            }
+
+                            recentGrid.innerHTML += `
+                                <button onclick="nav('watch', {id:'${m.id}', ep:${item.episode}})" class="text-left group animate-fade-in">
+                                    <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5 relative">
+                                        <img src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
+                                        
+                                        <!-- Groene badge met de exacte nieuwe live uitgezonden aflevering -->
+                                        <div class="absolute bottom-2 left-2 flex items-center gap-1 bg-[#cae962]/95 text-black text-[8px] font-black uppercase px-2 py-0.5 rounded shadow-lg">
+                                            <i class="fa-solid fa-closed-captioning text-[9px]"></i> EP ${item.episode}
+                                        </div>
+                                        
+                                        <span class="absolute top-2 right-2 bg-black/80 text-[7px] font-black text-zinc-300 px-1.5 py-0.5 rounded uppercase">
+                                            ${m.format || 'TV'}
+                                        </span>
+                                    </div>
+                                    <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white transition-colors">${t}</p>
+                                </button>`;
+                        });
+                        
+                        if (count === 0) {
+                            renderFallbackUpdates(recentGrid);
+                        }
+                    } else {
+                        renderFallbackUpdates(recentGrid);
+                    }
+                }).catch(() => {
+                    renderFallbackUpdates(recentGrid);
                 });
             }
         }
 
+        // Robuuste Fallback in het geval de live updates query faalt
+        function renderFallbackUpdates(container) {
+            container.innerHTML = '';
+            STATIC_TRENDING.slice(0, 6).forEach(m => {
+                container.innerHTML += `
+                    <button onclick="nav('watch', {id:'${m.id}'})" class="text-left group animate-fade-in">
+                        <div class="aspect-[2/3] rounded-xl overflow-hidden mb-2 border border-white/5 relative">
+                            <img src="${m.img}" onerror="this.src='${FALLBACK_COVER}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
+                            <div class="absolute bottom-2 left-2 flex items-center gap-1 bg-[#cae962]/95 text-black text-[8px] font-black uppercase px-2 py-0.5 rounded shadow-lg">
+                                <i class="fa-solid fa-closed-captioning text-[9px]"></i> EP 1
+                            </div>
+                        </div>
+                        <p class="text-[9px] font-black uppercase truncate leading-none px-1 text-zinc-400 group-hover:text-white">${m.title}</p>
+                    </button>`;
+            });
+        }
+
         window.renderLibraryGrid = function() {
             const grid = document.getElementById('xml-display-grid'); if (!grid) return;
-            let fXml = app.libraryFilter === 'All' ? app.xmlLib : app.xmlLib.filter(i => i && (app.libraryFilter === 'Watched' ? (i.status === 'Watched' || i.status === 'Completed') : i.status === app.libraryFilter));
+            
+            let fXml = app.xmlLib;
+            
+            // 1. Status Filter (All, Watching, Watched/Completed, Dropped, Plan to Watch)
+            if (app.libraryFilter !== 'All') {
+                fXml = fXml.filter(i => i && (app.libraryFilter === 'Watched' ? (i.status === 'Watched' || i.status === 'Completed') : i.status === app.libraryFilter));
+            }
+            
+            // 2. Zoekbalk filter
+            if (app.librarySearchQuery) {
+                fXml = fXml.filter(i => i && i.title.toLowerCase().includes(app.librarySearchQuery));
+            }
 
-            if (!fXml.length) return grid.innerHTML = `<p class="text-xs uppercase font-black text-center text-zinc-600 mt-10">Leeg in categorie ${app.libraryFilter}</p>`;
+            // 3. Genre filter
+            if (app.libraryFilterGenre && app.libraryFilterGenre !== 'All') {
+                fXml = fXml.filter(i => i && i.genres && i.genres.includes(app.libraryFilterGenre));
+            }
+
+            // 4. Type filter
+            if (app.libraryFilterType && app.libraryFilterType !== 'All') {
+                fXml = fXml.filter(i => i && i.format && i.format.toUpperCase() === app.libraryFilterType.toUpperCase());
+            }
+
+            if (!fXml.length) return grid.innerHTML = `<p class="text-xs uppercase font-black text-center text-zinc-600 mt-10">Geen matches gevonden voor de gekozen filters.</p>`;
             
             grid.innerHTML = '';
             fXml.forEach(item => {
                 if (!item) return;
                 const dStat = item.status === 'Watched' ? 'COMPLETED' : item.status.toUpperCase();
+                const coverUrl = item.coverImage || FALLBACK_COVER;
                 grid.innerHTML += `
                     <div id="lib-card-${item.id}" data-id="${item.id}" class="lazy-card card p-4 flex flex-col sm:flex-row justify-between gap-4 border border-white/5 animate-fade-in">
                         <div class="flex gap-4 items-center flex-1 min-w-0">
-                            <img id="img-${item.id}" src="${item.coverImage || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=150'}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5">
+                            <img id="img-${item.id}" src="${coverUrl}" onerror="this.src='${FALLBACK_COVER}'" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 border border-white/5 flex-shrink-0">
                             <div class="truncate pr-4 flex-1">
                                 <p class="text-white truncate font-bold text-sm mb-1">${item.title}</p>
-                                <div class="flex items-center gap-2"><span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black">${dStat}</span><span class="text-[9px] text-zinc-500 font-bold uppercase">Prog: <span id="progress-val-${item.id}">${item.progress}</span> / <span id="eps-total-${item.id}">${item.episodes || '?'}</span></span></div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[9px] bg-zinc-900 text-accent px-2 py-0.5 rounded font-black">${dStat}</span>
+                                    <span class="text-[9px] text-zinc-500 font-bold uppercase">Prog: <span id="progress-val-${item.id}">${item.progress}</span> / <span id="eps-total-${item.id}">${item.episodes || '?'}</span></span>
+                                    ${item.format ? `<span class="text-[8px] bg-white/5 text-zinc-400 px-1.5 py-0.5 rounded font-bold">${item.format}</span>` : ''}
+                                </div>
                             </div>
                         </div>
-                        <div class="flex items-center gap-2 self-end sm:self-auto">
+                        <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
                             <button onclick="nav('watch', {id:'${item.id}', ep:${item.progress || 1}})" class="bg-[#1a1a1a] hover:bg-accent hover:text-black px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-bold transition-colors"><i class="fa-solid fa-play"></i> Kijk</button>
                             <button onclick="quickIncrement('${item.id}')" class="bg-[#1a1a1a] hover:bg-zinc-800 px-4 py-2.5 rounded-xl text-xs text-zinc-400 font-black">+1 Ep</button>
                             <button onclick="changeLocalFolderPrompt('${item.id}')" class="bg-[#1a1a1a] hover:bg-zinc-800 p-3 rounded-xl text-xs text-zinc-400"><i class="fa-solid fa-folder-open"></i></button>
@@ -784,13 +1142,23 @@
                         const id = entry.target.getAttribute('data-id');
                         lazyObserver.unobserve(entry.target);
                         const it = app.xmlLib.find(i => i && i.id == id);
-                        if (it && (!it.coverImage || !it.episodes || it.episodes == 12)) {
-                            const meta = await fetchMyAnimeListMetadata(id, null, it.title);
-                            if (meta) {
-                                it.coverImage = meta.coverImage; it.episodes = meta.episodes;
-                                if (it.status === "Watched" && it.progress == 0) { it.progress = meta.episodes; document.getElementById(`progress-val-${id}`).innerText = meta.episodes; }
-                                const img = document.getElementById(`img-${id}`); if (img) img.src = meta.coverImage;
-                                const eps = document.getElementById(`eps-total-${id}`); if (eps) eps.innerText = meta.episodes;
+                        if (it && (!it.coverImage || it.coverImage === FALLBACK_COVER || !it.episodes || it.episodes == 12 || !it.genres)) {
+                            const meta = await gql(`query($id:Int){Media(id:$id){coverImage{extraLarge large medium}episodes genres format}}`, {id: parseInt(id)});
+                            if (meta && meta.data && meta.data.Media) {
+                                const m = meta.data.Media;
+                                const coverUrl = m.coverImage ? (m.coverImage.extraLarge || m.coverImage.large || m.coverImage.medium || FALLBACK_COVER) : FALLBACK_COVER;
+                                it.coverImage = coverUrl; 
+                                it.episodes = m.episodes || 12;
+                                it.genres = m.genres || [];
+                                it.format = m.format || "TV";
+
+                                if (it.status === "Watched" && it.progress == 0) { 
+                                    it.progress = it.episodes; 
+                                    const pVal = document.getElementById(`progress-val-${id}`);
+                                    if(pVal) pVal.innerText = it.episodes; 
+                                }
+                                const img = document.getElementById(`img-${id}`); if (img) img.src = coverUrl;
+                                const eps = document.getElementById(`eps-total-${id}`); if (eps) eps.innerText = it.episodes;
                                 saveCloudDataDebounced();
                             }
                         }
@@ -800,7 +1168,7 @@
 
             document.querySelectorAll('.lazy-card').forEach(c => {
                 const it = app.xmlLib.find(i => i && i.id == c.getAttribute('data-id'));
-                if (it && (!it.coverImage || !it.episodes || it.episodes == 12)) lazyObserver.observe(c);
+                if (it && (!it.coverImage || it.coverImage === FALLBACK_COVER || !it.episodes || it.episodes == 12 || !it.genres)) lazyObserver.observe(c);
             });
         };
     </script>
