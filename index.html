@@ -635,8 +635,8 @@
 
                 main.innerHTML = `
                     <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <!-- GEFIXTE SPELER IFRAME -->
-                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
+                        <!-- GEFIXTE SPELER IFRAME MET POPUP BLOCKER -->
+                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; fullscreen"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
                     <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] font-bold">
