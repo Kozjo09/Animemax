@@ -103,6 +103,7 @@
         let dubTimeout = null;
         let lazyObserver = null;
         let searchTimeout = null;
+        let countdownInterval = null; // Voor de live timer
 
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', libraryFilter: 'All',
@@ -459,6 +460,7 @@
             if (!sessionData) return showLoginPage('login');
             if (app.view === 'watch' && app.id) saveCurrentVideoTime();
             clearInterval(saveInterval); clearTimeout(dubTimeout);
+            clearInterval(countdownInterval); // Stop de timer
             if (lazyObserver) lazyObserver.disconnect();
 
             app.view = view; app.id = params.id || null; app.ep = params.ep || 1;
@@ -633,7 +635,7 @@
 
                 main.innerHTML = `
                     <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <!-- GEFIXTE SPELER IFRAME: Jouw originele player die 100% vlekkeloos laadt -->
+                        <!-- GEFIXTE SPELER IFRAME -->
                         <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
@@ -656,6 +658,9 @@
                             <span class="text-[9px] font-black uppercase text-zinc-400">Auto Next</span>
                         </label>
                     </div>
+
+                    <!-- Container voor de Live Countdown Timer -->
+                    <div id="next-ep-timer-container"></div>
 
                     <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">${title}</h1>
                     
@@ -692,12 +697,52 @@
                 startDubCheckTimer();
 
                 setTimeout(() => {
-                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                    // Vernieuwde query inclusief "airingAt"
+                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode airingAt}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                         if (!res || !res.data) return;
                         const m = res.data.Media;
                         const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
                         document.getElementById('w-title').innerText = t;
                         saveRecent(app.id, t, m.coverImage.large, app.ep);
+
+                        // --- LIVE TIMER LOGICA ---
+                        const timerContainer = document.getElementById('next-ep-timer-container');
+                        if (m.nextAiringEpisode && m.nextAiringEpisode.airingAt) {
+                            const targetTime = m.nextAiringEpisode.airingAt * 1000;
+                            const nextEpNum = m.nextAiringEpisode.episode;
+                            
+                            const updateTimer = () => {
+                                const now = new Date().getTime();
+                                const distance = targetTime - now;
+
+                                if (distance < 0) {
+                                    clearInterval(countdownInterval);
+                                    if(timerContainer) timerContainer.innerHTML = `<div class="bg-zinc-900/80 border border-accent/20 p-3 rounded-xl mb-4 text-center shadow-lg"><span class="text-xs font-black text-accent uppercase">Aflevering ${nextEpNum} is nu uit!</span></div>`;
+                                    return;
+                                }
+
+                                const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+                                const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+                                if(timerContainer) timerContainer.innerHTML = `
+                                    <div class="bg-zinc-900/80 border border-white/5 p-3 rounded-xl mb-4 flex items-center justify-between shadow-lg">
+                                        <span class="text-[10px] font-black uppercase text-zinc-400 flex items-center gap-2"><i class="fa-solid fa-clock"></i> Verwacht: Ep ${nextEpNum}</span>
+                                        <span class="text-xs font-black text-accent tabular-nums">
+                                            ≈ ${days}d ${hours}u ${minutes}m ${seconds}s
+                                        </span>
+                                    </div>
+                                `;
+                            };
+                            
+                            updateTimer(); 
+                            clearInterval(countdownInterval);
+                            countdownInterval = setInterval(updateTimer, 1000);
+                        } else {
+                            if(timerContainer) timerContainer.innerHTML = '';
+                        }
+                        // --- EINDE LIVE TIMER LOGICA ---
 
                         let tEps = m.episodes || 12; let aEps = tEps;
                         if (m.status === 'RELEASING' && m.nextAiringEpisode) aEps = m.nextAiringEpisode.episode - 1;
@@ -871,4 +916,4 @@
         };
     </script>
 </body>
-    </html>
+</html>
