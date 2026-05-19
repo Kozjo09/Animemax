@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <!-- Voorkomt 403 Forbidden fouten bij het laden van externe AniList cover afbeeldingen -->
+    <!-- Voorkomt 403 Forbidden fouten bij het laden van AniList covers -->
     <meta name="referrer" content="no-referrer">
     <title>AnimeMax Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -689,7 +689,7 @@
             countdownInterval = setInterval(updateTimer, 1000);
         }
 
-        // --- AUTONEXT EVENT LISTENER & TRIGGERS (DE FIX) ---
+        // --- AUTONEXT EVENT LISTENER & TRIGGERS ---
         window.addEventListener('message', function(event) {
             try {
                 const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
@@ -720,7 +720,6 @@
                     }
                 }
                 
-                // Activeer auto-next wanneer de video eindigt of de absolute laatste seconden raakt
                 const isEnded = eventName === 'ended' || eventName === 'onVideoEnded' || eventName === 'complete';
                 const isNearEnd = (currentDuration > 10 && currentPlaybackTime >= currentDuration - 2.5);
 
@@ -774,8 +773,8 @@
 
                 main.innerHTML = `
                     <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <!-- Beveiligd iframe met sandbox om popups en redirects te blokkeren -->
-                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen" sandbox="allow-scripts allow-same-origin allow-presentation"></iframe>
+                        <!-- GEFIXTE IFRAME MET STRIP/ALLOW RESTRUCTURING: Zorgt ervoor dat megaplay.buzz perfect laadt -->
+                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
                     
@@ -1056,7 +1055,7 @@
                     }
                 });
 
-                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden (TIME_DESC)
+                // Haal live uitzendingen op die zojuist/recent hebben plaatsgevonden (TIME_DESC vereist een array wrapper in AniList GraphQL)
                 const recentGrid = document.getElementById('recently-updated-grid');
                 const currentTimeSec = Math.floor(Date.now() / 1000);
 
