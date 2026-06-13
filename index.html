@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>AnimeMax Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Officiële Supabase Browser Client SDK -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
     <style>
@@ -46,10 +45,8 @@
 </head>
 <body class="pb-32 relative">
 
-    <!-- Toast Meldingen Container -->
     <div id="toast-container" class="flex flex-col gap-2"></div>
 
-    <!-- Bevestigingsmodal -->
     <div id="confirm-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[10000] hidden items-center justify-center p-4">
         <div class="bg-[#121212] border border-white/5 p-6 rounded-2xl max-w-sm w-full shadow-2xl">
             <h3 id="confirm-title" class="text-lg font-black uppercase tracking-wider mb-2">Bevestigen</h3>
@@ -61,7 +58,6 @@
         </div>
     </div>
 
-    <!-- Header -->
     <header id="app-header" class="sticky top-0 z-50 glass p-4 hidden">
         <div class="flex items-center justify-between max-w-4xl mx-auto mb-2">
             <button onclick="nav('home')" class="text-2xl font-black italic uppercase tracking-tighter">ANIME<span class="accent">MAX</span></button>
@@ -75,7 +71,6 @@
         </div>
     </header>
 
-    <!-- Hoofdinhoud -->
     <main id="content" class="p-4 max-w-4xl mx-auto min-h-[60vh]">
         <div class="text-center py-24" id="main-loader">
             <i class="fa-solid fa-circle-notch animate-spin text-4xl accent mb-4"></i>
@@ -83,7 +78,6 @@
         </div>
     </main>
 
-    <!-- Bottom Navigatiebalk -->
     <nav id="app-navigation" class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-md glass rounded-[2.5rem] p-2 flex justify-around items-center shadow-2xl z-[100] border border-white/10 hidden">
         <button onclick="nav('home')" class="p-4 nav-link hover:text-white transition-colors" id="nav-home" title="Home"><i class="fa-solid fa-house"></i></button>
         <button onclick="nav('recent')" class="p-4 nav-link hover:text-white transition-colors" id="nav-recent" title="Verder Kijken"><i class="fa-solid fa-clock-rotate-left"></i></button>
@@ -603,6 +597,17 @@
 
         // Trigger de volgende aflevering (met behoud van cover-sync & database)
         window.playNextEpisode = function() {
+            // FIX: Haal de speler handmatig uit fullscreen voordat de DOM vernieuwt.
+            // Dit voorkomt de z-index / banner overlay bug in browsers.
+            if (document.fullscreenElement || document.webkitFullscreenElement) {
+                if (document.exitFullscreen) {
+                    let p = document.exitFullscreen();
+                    if (p && p.catch) p.catch(()=>{});
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
+            }
+
             const loc = app.xmlLib.find(i => i && i.id == app.id) || app.recent.find(i => i && i.id == app.id);
             const totalEps = loc ? (loc.episodes || 12) : 12;
             const nextEp = parseInt(app.ep) + 1;
@@ -610,7 +615,12 @@
             if (nextEp <= totalEps) {
                 window.showToast(`Start aflevering ${nextEp}...`);
                 window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', nextEp, totalEps, loc ? loc.coverImage : '');
-                nav('watch', { id: app.id, ep: nextEp });
+                
+                // Een kleine vertraging van 200ms geeft de browser de tijd om de layout
+                // netjes te herstellen voordat de nieuwe aflevering laadt.
+                setTimeout(() => {
+                    nav('watch', { id: app.id, ep: nextEp });
+                }, 200);
             } else {
                 window.showToast("Laatste aflevering al bereikt!", "error");
             }
@@ -635,7 +645,6 @@
 
                 main.innerHTML = `
                     <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <!-- GEFIXTE SPELER IFRAME MET POPUP BLOCKER -->
                         <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; fullscreen"></iframe>
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
@@ -647,7 +656,6 @@
                         <div class="flex gap-2">
                             <button onclick="checkAudioAvailabilityAndPlay('sub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
                             <button onclick="checkAudioAvailabilityAndPlay('dub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
-                            <!-- Directe handmatige Volgende Ep knop onder de player -->
                             <button onclick="playNextEpisode()" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/5 transition flex items-center gap-1.5" title="Direct naar de volgende aflevering gaan">
                                 <i class="fa-solid fa-forward"></i> Volgende Ep
                             </button>
@@ -659,7 +667,6 @@
                         </label>
                     </div>
 
-                    <!-- Container voor de Live Countdown Timer -->
                     <div id="next-ep-timer-container"></div>
 
                     <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">${title}</h1>
@@ -917,3 +924,4 @@
     </script>
 </body>
 </html>
+
