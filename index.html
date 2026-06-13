@@ -598,7 +598,6 @@
         // Trigger de volgende aflevering (met behoud van cover-sync & database)
         window.playNextEpisode = function() {
             // FIX: Haal de speler handmatig uit fullscreen voordat de DOM vernieuwt.
-            // Dit voorkomt de z-index / banner overlay bug in browsers.
             if (document.fullscreenElement || document.webkitFullscreenElement) {
                 if (document.exitFullscreen) {
                     let p = document.exitFullscreen();
@@ -616,13 +615,41 @@
                 window.showToast(`Start aflevering ${nextEp}...`);
                 window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', nextEp, totalEps, loc ? loc.coverImage : '');
                 
-                // Een kleine vertraging van 200ms geeft de browser de tijd om de layout
-                // netjes te herstellen voordat de nieuwe aflevering laadt.
                 setTimeout(() => {
                     nav('watch', { id: app.id, ep: nextEp });
                 }, 200);
             } else {
-                window.showToast("Laatste aflevering al bereikt!", "error");
+                // Laatste aflevering bereikt: Check de AniList API voor een sequel!
+                window.showToast("Searching for next season...");
+                
+                gql(`query($id:Int){Media(id:$id){relations{edges{relationType node{id type status episodes coverImage{large} title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                    if (!res || !res.data) return window.showToast("Laatste aflevering al bereikt!", "error");
+                    
+                    const edges = res.data.Media.relations.edges;
+                    const sequelEdge = edges.find(e => e.relationType === 'SEQUEL' && e.node.type === 'ANIME');
+                    
+                    if (sequelEdge) {
+                        const sequel = sequelEdge.node;
+                        const sequelTitle = app.lang === 'english' ? (sequel.title.english || sequel.title.romaji) : sequel.title.romaji;
+                        
+                        // Toon de popup met de Engelse vraag en de titel eronder
+                        window.showConfirm("Do you want to go to the next season?", sequelTitle, () => {
+                            // 1. Zet het huidige afgeronde seizoen op Watched
+                            window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', totalEps, totalEps, loc ? loc.coverImage : '', 'Watched');
+                            
+                            // 2. Bepaal status van het nieuwe seizoen (Dropped als het nog aan het releasen is, anders Watching)
+                            const newStatus = sequel.status === 'RELEASING' ? 'Dropped' : 'Watching';
+                            
+                            // 3. Voeg de sequel toe op Ep 1 met de berekende status en navigeer er naartoe
+                            window.autoUpdateProgressOnEpClick(sequel.id, sequelTitle, 1, sequel.episodes || 12, sequel.coverImage.large, newStatus);
+                            nav('watch', { id: sequel.id, ep: 1 });
+                        });
+                    } else {
+                        // Geen sequel gevonden, markeer de huidige simpelweg als voltooid
+                        window.showToast("Anime compleet! Geen volgend seizoen gevonden.", "success");
+                        window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', totalEps, totalEps, loc ? loc.coverImage : '', 'Watched');
+                    }
+                });
             }
         };
 
