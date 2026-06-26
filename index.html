@@ -97,7 +97,7 @@
         let dubTimeout = null;
         let lazyObserver = null;
         let searchTimeout = null;
-        let countdownInterval = null; // Voor de live timer
+        let countdownInterval = null;
 
         let app = {
             view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', libraryFilter: 'All',
@@ -366,6 +366,7 @@
             }
         };
 
+        // GECORRIGEERDE EXPORT FUNCTIE: Bevat nu de vereiste <update_on_import>1</update_on_import> tag voor MAL import.
         window.exportMyAnimeListXML = function() {
             let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n<myanimelist>\n\t<myinfo>\n\t\t<user_name>${app.user}</user_name>\n\t</myinfo>\n`;
             app.xmlLib.forEach(item => {
@@ -373,7 +374,7 @@
                 if (item.status === "Watched" || item.status === "Completed") sNum = 2;
                 if (item.status === "Dropped") sNum = 4;
                 if (item.status === "Plan to Watch") sNum = 6;
-                xml += `\t<anime>\n\t\t<series_animedb_id>${item.id}</series_animedb_id>\n\t\t<series_title><![CDATA[${item.title}]]></series_title>\n\t\t<my_watched_episodes>${item.progress}</my_watched_episodes>\n\t\t<my_status>${sNum}</my_status>\n\t</anime>\n`;
+                xml += `\t<anime>\n\t\t<series_animedb_id>${item.id}</series_animedb_id>\n\t\t<series_title><![CDATA[${item.title}]]></series_title>\n\t\t<my_watched_episodes>${item.progress}</my_watched_episodes>\n\t\t<my_status>${sNum}</my_status>\n\t\t<update_on_import>1</update_on_import>\n\t</anime>\n`;
             });
             xml += `</myanimelist>`;
             
@@ -384,7 +385,7 @@
             a.download = `animemax_backup_${Date.now()}.xml`;
             a.click();
             URL.revokeObjectURL(url);
-            window.showToast("Back-up gedownload!");
+            window.showToast("Back-up gedownload met MAL update-tags!");
         };
 
         window.handleXML = function() {
@@ -454,7 +455,7 @@
             if (!sessionData) return showLoginPage('login');
             if (app.view === 'watch' && app.id) saveCurrentVideoTime();
             clearInterval(saveInterval); clearTimeout(dubTimeout);
-            clearInterval(countdownInterval); // Stop de timer
+            clearInterval(countdownInterval);
             if (lazyObserver) lazyObserver.disconnect();
 
             app.view = view; app.id = params.id || null; app.ep = params.ep || 1;
@@ -564,7 +565,6 @@
                             currentDuration = parseFloat(duration);
                         }
                         
-                        // Live UI update
                         const timeText = document.getElementById('playback-time-text');
                         const percentageText = document.getElementById('playback-progress-percentage');
                         if (timeText) {
@@ -577,7 +577,6 @@
                     }
                 }
                 
-                // Activeer autonext als de video eindigt of de laatste 2.5 seconden raakt
                 const isEnded = eventName === 'ended' || eventName === 'onVideoEnded' || eventName === 'complete';
                 const isNearEnd = (currentDuration > 10 && currentPlaybackTime >= currentDuration - 2.5);
 
@@ -590,14 +589,10 @@
                         window.playNextEpisode();
                     }
                 }
-            } catch (e) {
-                // Veilig negeren van postMessages van externe partijen
-            }
+            } catch (e) { }
         });
 
-        // Trigger de volgende aflevering (met behoud van cover-sync & database)
         window.playNextEpisode = function() {
-            // FIX: Haal de speler handmatig uit fullscreen voordat de DOM vernieuwt.
             if (document.fullscreenElement || document.webkitFullscreenElement) {
                 if (document.exitFullscreen) {
                     let p = document.exitFullscreen();
@@ -619,8 +614,7 @@
                     nav('watch', { id: app.id, ep: nextEp });
                 }, 200);
             } else {
-                // Laatste aflevering bereikt: Check de AniList API voor een sequel!
-                window.showToast("Searching for next season...");
+                window.showToast("Zoeken naar volgend seizoen...");
                 
                 gql(`query($id:Int){Media(id:$id){relations{edges{relationType node{id type status episodes coverImage{large} title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                     if (!res || !res.data) return window.showToast("Laatste aflevering al bereikt!", "error");
@@ -632,21 +626,16 @@
                         const sequel = sequelEdge.node;
                         const sequelTitle = app.lang === 'english' ? (sequel.title.english || sequel.title.romaji) : sequel.title.romaji;
                         
-                        // Toon de popup met de Engelse vraag en de titel eronder
-                        window.showConfirm("Do you want to go to the next season?", sequelTitle, () => {
-                            // 1. Zet het huidige afgeronde seizoen op Watched
+                        window.showConfirm("Wil je doorgaan naar het volgende seizoen?", sequelTitle, () => {
                             window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', totalEps, totalEps, loc ? loc.coverImage : '', 'Watched');
                             
-                            // 2. Bepaal status van het nieuwe seizoen (Dropped als het nog aan het releasen is, anders Watching)
                             const newStatus = sequel.status === 'RELEASING' ? 'Dropped' : 'Watching';
                             
-                            // 3. Voeg de sequel toe op Ep 1 met de berekende status en navigeer er naartoe
                             window.autoUpdateProgressOnEpClick(sequel.id, sequelTitle, 1, sequel.episodes || 12, sequel.coverImage.large, newStatus);
                             nav('watch', { id: sequel.id, ep: 1 });
                         });
                     } else {
-                        // Geen sequel gevonden, markeer de huidige simpelweg als voltooid
-                        window.showToast("Anime compleet! Geen volgend seizoen gevonden.", "success");
+                        window.showToast("Anime voltooid! Geen volgend seizoen gevonden.", "success");
                         window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', totalEps, totalEps, loc ? loc.coverImage : '', 'Watched');
                     }
                 });
@@ -731,7 +720,6 @@
                 startDubCheckTimer();
 
                 setTimeout(() => {
-                    // Vernieuwde query inclusief "airingAt"
                     gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode airingAt}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                         if (!res || !res.data) return;
                         const m = res.data.Media;
@@ -739,7 +727,6 @@
                         document.getElementById('w-title').innerText = t;
                         saveRecent(app.id, t, m.coverImage.large, app.ep);
 
-                        // --- LIVE TIMER LOGICA ---
                         const timerContainer = document.getElementById('next-ep-timer-container');
                         if (m.nextAiringEpisode && m.nextAiringEpisode.airingAt) {
                             const targetTime = m.nextAiringEpisode.airingAt * 1000;
@@ -776,7 +763,6 @@
                         } else {
                             if(timerContainer) timerContainer.innerHTML = '';
                         }
-                        // --- EINDE LIVE TIMER LOGICA ---
 
                         let tEps = m.episodes || 12; let aEps = tEps;
                         if (m.status === 'RELEASING' && m.nextAiringEpisode) aEps = m.nextAiringEpisode.episode - 1;
@@ -855,7 +841,7 @@
                         <div class="card p-8 bg-accent/5 text-center"><h2 class="font-black uppercase mb-2 text-sm accent">AniList Import</h2>
                         <button onclick="importAndMergeAniListCloud()" class="w-full bg-accent text-black font-black py-4 rounded-xl text-[10px] uppercase"><i class="fa-solid fa-cloud-arrow-down"></i> Nu Importeren</button></div>
 
-                        <div class="card p-8 border-green-500/20 text-center"><h2 class="font-black uppercase mb-2 text-sm">Download XML Back-up</h2>
+                        <div class="card p-8 border-green-500/20 text-center"><h2 class="font-black uppercase mb-2 text-sm">Download XML Back-up (MAL-Ready)</h2>
                         <button onclick="exportMyAnimeListXML()" class="w-full bg-zinc-900 text-white hover:bg-accent hover:text-black font-black py-4 rounded-xl text-[10px] uppercase border border-white/15 transition-all"><i class="fa-solid fa-file-export"></i> XML Downloaden</button></div>
 
                         <div class="card p-8 border-white/5 text-center"><h2 class="font-black uppercase mb-4 text-sm">Import XML (MAL/HiAnime)</h2>
