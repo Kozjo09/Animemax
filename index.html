@@ -366,15 +366,41 @@
             }
         };
 
-        // GECORRIGEERDE EXPORT FUNCTIE: Bevat nu de vereiste <update_on_import>1</update_on_import> tag voor MAL import.
-        window.exportMyAnimeListXML = function() {
-            let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n<myanimelist>\n\t<myinfo>\n\t\t<user_name>${app.user}</user_name>\n\t</myinfo>\n`;
+        // GECORRIGEERDE EXPORT FUNCTIE: Zet nu AniList ID's over naar MAL ID's en gebruikt correcte strings!
+        window.exportMyAnimeListXML = async function() {
+            window.showToast("Voorbereiden (ophalen MAL ID's)... Dit kan even duren.");
+            
+            const aniIds = app.xmlLib.map(i => parseInt(i.id)).filter(id => !isNaN(id));
+            let malIdMap = {};
+            
+            // AniList ID naar MAL ID vertalen
+            try {
+                for (let i = 0; i < aniIds.length; i += 50) {
+                    const chunk = aniIds.slice(i, i + 50);
+                    const res = await gql(`query($in:[Int]){Page(perPage:50){media(id_in:$in,type:ANIME){id idMal}}}`, { "in": chunk });
+                    if (res && res.data && res.data.Page.media) {
+                        res.data.Page.media.forEach(m => {
+                            if (m.idMal) malIdMap[m.id] = m.idMal;
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error("Fout bij ophalen MAL ID's", e);
+            }
+
+            let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n<myanimelist>\n\t<myinfo>\n\t\t<user_name>${app.user}</user_name>\n\t\t<user_export_type>1</user_export_type>\n\t</myinfo>\n`;
+            
             app.xmlLib.forEach(item => {
-                let sNum = 1; 
-                if (item.status === "Watched" || item.status === "Completed") sNum = 2;
-                if (item.status === "Dropped") sNum = 4;
-                if (item.status === "Plan to Watch") sNum = 6;
-                xml += `\t<anime>\n\t\t<series_animedb_id>${item.id}</series_animedb_id>\n\t\t<series_title><![CDATA[${item.title}]]></series_title>\n\t\t<my_watched_episodes>${item.progress}</my_watched_episodes>\n\t\t<my_status>${sNum}</my_status>\n\t\t<update_on_import>1</update_on_import>\n\t</anime>\n`;
+                // MyAnimeList string formatting in de export
+                let statusStr = "Watching";
+                if (item.status === "Watched" || item.status === "Completed") statusStr = "Completed";
+                else if (item.status === "Dropped") statusStr = "Dropped";
+                else if (item.status === "Plan to Watch") statusStr = "Plan to Watch";
+                
+                // Fallback op eigen id als er geen MAL id is, hoewel het dan mogelijk overgeslagen wordt door MAL
+                const malId = malIdMap[item.id] || item.id;
+                
+                xml += `\t<anime>\n\t\t<series_animedb_id>${malId}</series_animedb_id>\n\t\t<series_title><![CDATA[${item.title}]]></series_title>\n\t\t<my_watched_episodes>${item.progress}</my_watched_episodes>\n\t\t<my_status>${statusStr}</my_status>\n\t\t<update_on_import>1</update_on_import>\n\t</anime>\n`;
             });
             xml += `</myanimelist>`;
             
@@ -382,38 +408,104 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `animemax_backup_${Date.now()}.xml`;
+            a.download = `animemax_mal_backup_${Date.now()}.xml`;
             a.click();
             URL.revokeObjectURL(url);
-            window.showToast("Back-up gedownload met MAL update-tags!");
+            window.showToast("MAL Back-up succesvol gedownload!");
         };
 
+        // GECORRIGEERDE IMPORT FUNCTIE: Zet MyAnimeList ID's terug om in AniList ID's!
         window.handleXML = function() {
             const file = document.getElementById('xml-input').files[0];
             if (!file) return window.showToast("Selecteer een XML bestand", "error");
             const reader = new FileReader();
-            reader.onload = function(e) {
+            
+            reader.onload = async function(e) {
                 const content = e.target.result;
                 if (content.includes('<anime>')) {
+                    window.showToast("XML analyseren en vertalen...");
+                    
                     const parser = new DOMParser();
                     const xmlDoc = parser.parseFromString(content, "text/xml");
                     const animes = xmlDoc.getElementsByTagName("anime");
-                    let imported = [];
+                    
+                    let importedMalItems = [];
+                    let malIdsToFetch = [];
+
                     for (let i = 0; i < animes.length; i++) {
-                        const id = animes[i].getElementsByTagName("series_animedb_id")[0]?.textContent;
+                        const idText = animes[i].getElementsByTagName("series_animedb_id")[0]?.textContent;
                         const title = animes[i].getElementsByTagName("series_title")[0]?.textContent || "Unknown";
                         const eps = parseInt(animes[i].getElementsByTagName("my_watched_episodes")[0]?.textContent || 0);
                         const sNum = animes[i].getElementsByTagName("my_status")[0]?.textContent;
+                        
                         let statusStr = "Watching";
-                        if (sNum == "2") statusStr = "Watched";
-                        if (sNum == "4") statusStr = "Dropped";
-                        if (sNum == "6") statusStr = "Plan to Watch";
-                        if (id) imported.push({ id, title, status: statusStr, progress: eps, episodes: 12, coverImage: "" });
+                        if (sNum == "2" || sNum === "Completed" || sNum === "Watched") statusStr = "Watched";
+                        if (sNum == "4" || sNum === "Dropped") statusStr = "Dropped";
+                        if (sNum == "6" || sNum === "Plan to Watch") statusStr = "Plan to Watch";
+                        
+                        if (idText) {
+                            const id = parseInt(idText);
+                            if (!isNaN(id)) {
+                                importedMalItems.push({ malId: id, title, status: statusStr, progress: eps });
+                                malIdsToFetch.push(id);
+                            }
+                        }
                     }
-                    app.xmlLib = mergeWatchlists(app.xmlLib, imported);
+
+                    // MyAnimeList ID naar AniList ID vertalen voor videospeler
+                    let malToAniMap = {};
+                    let aniMetaData = {};
+                    try {
+                        for (let i = 0; i < malIdsToFetch.length; i += 50) {
+                            const chunk = malIdsToFetch.slice(i, i + 50);
+                            const res = await gql(`query($in:[Int]){Page(perPage:50){media(idMal_in:$in,type:ANIME){id idMal title{romaji english} coverImage{large} episodes}}}`, { "in": chunk });
+                            if (res && res.data && res.data.Page.media) {
+                                res.data.Page.media.forEach(m => {
+                                    malToAniMap[m.idMal] = m.id;
+                                    aniMetaData[m.id] = {
+                                        title: app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji,
+                                        coverImage: m.coverImage.large,
+                                        episodes: m.episodes || 12
+                                    };
+                                });
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Fout bij omzetten MAL IDs", err);
+                    }
+
+                    let finalImport = [];
+                    importedMalItems.forEach(item => {
+                        const aniId = malToAniMap[item.malId];
+                        if (aniId) {
+                            const meta = aniMetaData[aniId];
+                            finalImport.push({
+                                id: aniId.toString(),
+                                title: meta.title || item.title,
+                                status: item.status,
+                                progress: item.progress,
+                                episodes: meta.episodes,
+                                coverImage: meta.coverImage
+                            });
+                        } else {
+                            finalImport.push({
+                                id: item.malId.toString(), // Onbekende id fallback
+                                title: item.title,
+                                status: item.status,
+                                progress: item.progress,
+                                episodes: 12,
+                                coverImage: ""
+                            });
+                        }
+                    });
+
+                    app.xmlLib = mergeWatchlists(app.xmlLib, finalImport);
                     saveCloudData();
-                    window.showToast(`${imported.length} items geïmporteerd!`);
-                } else { window.showToast("Ongeldig bestand.", "error"); }
+                    window.showToast(`${finalImport.length} items geïmporteerd & omgezet!`);
+                    if(app.view === 'library') renderLibraryGrid();
+                } else { 
+                    window.showToast("Ongeldig bestand.", "error"); 
+                }
             };
             reader.readAsText(file);
         };
