@@ -3,9 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- Meta tag voor de CryptoManager sessie sleutel (optioneel/nodig voor de nieuwe API) -->
+    <meta name="k-session" content="">
     <title>AnimeMax Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- HLS.js for native m3u8 streaming with custom fallbacks -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- reCAPTCHA v3 voor de nieuwe API calls -->
+    <script src="https://www.google.com/recaptcha/api.js?render=6LfzHX8sAAAAAN70WElpj4nM__wxhllZQNZCAFGb"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
@@ -16,7 +22,7 @@
         .card { background: #121212; border-radius: 18px; border: 1px solid rgba(255,255,255,0.03); transition: 0.2s; }
         .card:hover { border-color: rgba(202, 233, 98, 0.3); }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        iframe { width: 100%; height: 100%; border: none; }
+        iframe, video { width: 100%; height: 100%; border: none; }
         
         /* Toggle Switch */
         .toggle-checkbox:checked + .toggle-bg { background-color: #cae962; }
@@ -41,6 +47,16 @@
         .animate-toast { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .animate-fade-in { animation: fadeIn 0.3s ease-in-out forwards; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* Custom Video Player Styling */
+        video::cue {
+            background-color: transparent;
+            color: white;
+            text-shadow: 2px 2px 4px #000, -2px -2px 4px #000, 2px -2px 4px #000, -2px 2px 4px #000;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 700;
+        }
     </style>
 </head>
 <body class="pb-32 relative">
@@ -86,7 +102,391 @@
     </nav>
 
     <script>
+        // =========================================================================
+        // NIEUWE KUROVEXA / ANINEKO API ENCRYPTIE LOGICA
+        // =========================================================================
+        const API_BASE = '/api/anime';
+        const RECAPTCHA_SITE_KEY = '6LfzHX8sAAAAAN70WElpj4nM__wxhllZQNZCAFGb';
+        const API_CACHE = new Map();
+        const API_INFLIGHT = new Map();
+
+        function getApiCacheTtl(path) {
+            if (!path) return 0;
+            if (path.startsWith('/watch/')) return 0;
+            if (path.startsWith('/suggestions')) return 20_000;
+            if (path.startsWith('/spotlight')) return 0;
+            if (path.startsWith('/trending') || path.startsWith('/popular') || path.startsWith('/upcoming') || path.startsWith('/recent') || path.startsWith('/schedule')) return 45_000;
+            if (path.startsWith('/search') || path.startsWith('/filter')) return 30_000;
+            if (path.startsWith('/info/') || path.startsWith('/episodes/')) return 300_000;
+            if (path.startsWith('/eclipse/map/')) return 86_400_000;
+            if (path.startsWith('/eclipse/servers')) return 300_000;
+            if (path.startsWith('/eclipse/sources')) return 0;
+            if (path.includes('/characters') || path.includes('/recommendations')) return 180_000;
+            return 15_000;
+        }
+
+        async function getReCaptchaToken(action) {
+            try {
+                for (let i = 0; i < 20 && typeof grecaptcha === 'undefined'; i++) {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                if (typeof grecaptcha === 'undefined') return null;
+                await new Promise(r => grecaptcha.ready(r));
+                return await grecaptcha.execute(RECAPTCHA_SITE_KEY, { action });
+            } catch (e) {
+                console.warn('[reCAPTCHA v3 API] token error:', e);
+                return null;
+            }
+        }
+
+        class CryptoManager {
+            constructor() {
+                this.key = null;
+                this.initPromise = this.init();
+            }
+
+            async init() {
+                const meta = document.querySelector('meta[name="k-session"]');
+                if (!meta || !meta.content) {
+                    console.warn("[Crypto] No session key found, falling back to unencrypted API if possible.");
+                    return;
+                }
+
+                try {
+                    const rawKey = this.base64ToArrayBuffer(meta.content);
+                    this.key = await window.crypto.subtle.importKey(
+                        "raw",
+                        rawKey,
+                        { name: "AES-GCM" },
+                        false,
+                        ["encrypt", "decrypt"]
+                    );
+                } catch (e) {
+                    console.error("[Crypto] Key import failed:", e);
+                }
+            }
+
+            base64ToArrayBuffer(base64) {
+                const binary_string = window.atob(base64);
+                const len = binary_string.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binary_string.charCodeAt(i);
+                }
+                return bytes.buffer;
+            }
+
+            arrayBufferToBase64(buffer) {
+                let binary = '';
+                const bytes = new Uint8Array(buffer);
+                for (let i = 0; i < bytes.byteLength; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                return window.btoa(binary);
+            }
+
+            async encryptPayload(obj) {
+                if (!this.key) return null;
+                const iv = window.crypto.getRandomValues(new Uint8Array(12));
+                const encoded = new TextEncoder().encode(JSON.stringify(obj));
+
+                const cipherBuffer = await window.crypto.subtle.encrypt(
+                    { name: "AES-GCM", iv: iv },
+                    this.key,
+                    encoded
+                );
+
+                const payload = new Uint8Array(iv.length + cipherBuffer.byteLength);
+                payload.set(iv, 0);
+                payload.set(new Uint8Array(cipherBuffer), iv.length);
+
+                return this.arrayBufferToBase64(payload);
+            }
+
+            async decryptResponse(base64Str) {
+                if (!this.key) return null;
+                const buffer = this.base64ToArrayBuffer(base64Str);
+                const bytes = new Uint8Array(buffer);
+
+                const iv = bytes.slice(0, 12);
+                const ct = bytes.slice(12);
+
+                const decryptedBuffer = await window.crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv: iv },
+                    this.key,
+                    ct
+                );
+                return decryptedBuffer;
+            }
+        }
+
+        const cryptoInstance = new CryptoManager();
+        window.cryptoInstance = cryptoInstance;
+        window.fetchAPI = fetchAPI;
+
+        async function decompressGzip(buffer) {
+            if (typeof DecompressionStream !== 'undefined') {
+                const ds = new DecompressionStream('gzip');
+                const writer = ds.writable.getWriter();
+                writer.write(new Uint8Array(buffer));
+                writer.close();
+                const response = new Response(ds.readable);
+                return await response.arrayBuffer();
+            } else {
+                console.warn("[Crypto] DecompressionStream not supported");
+                return buffer;
+            }
+        }
+
+        async function fetchAPI(path) {
+            await cryptoInstance.initPromise;
+            const cacheKey = path;
+            const ttlMs = getApiCacheTtl(path);
+            const now = Date.now();
+
+            if (ttlMs > 0) {
+                const cached = API_CACHE.get(cacheKey);
+                if (cached && cached.expiresAt > now) return cached.data;
+                if (cached && cached.expiresAt <= now) API_CACHE.delete(cacheKey);
+            }
+
+            if (API_INFLIGHT.has(cacheKey)) {
+                return API_INFLIGHT.get(cacheKey);
+            }
+
+            const runRequest = async () => {
+                if (cryptoInstance.key) {
+                    const payload = {
+                        path: path,
+                        method: 'GET',
+                        query: {},
+                        body: null,
+                        version: '0.1.0'
+                    };
+
+                    const encryptedB64 = await cryptoInstance.encryptPayload(payload);
+                    const res = await fetch(`/api/secure/pipe?e=${encodeURIComponent(encryptedB64)}`);
+
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+                    const responseB64 = await res.text();
+                    const decryptedBytes = await cryptoInstance.decryptResponse(responseB64);
+
+                    try {
+                        const decompressedBytes = await decompressGzip(decryptedBytes);
+                        const jsonText = new TextDecoder().decode(decompressedBytes);
+                        return JSON.parse(jsonText);
+                    } catch (e) {
+                        console.error("[Crypto] Failed to decompress/parse response", e);
+                        throw e;
+                    }
+                } else {
+                    const headers = {};
+                    const res = await fetch(API_BASE + path, { headers });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                }
+            };
+
+            const requestPromise = runRequest()
+                .then((data) => {
+                    if (ttlMs > 0) {
+                        API_CACHE.set(cacheKey, { data, expiresAt: Date.now() + ttlMs });
+                    }
+                    return data;
+                })
+                .finally(() => {
+                    API_INFLIGHT.delete(cacheKey);
+                });
+
+            API_INFLIGHT.set(cacheKey, requestPromise);
+            return requestPromise;
+        }
+
+        const ANILIST_ENDPOINT = 'https://graphql.anilist.co';
+        const ANILIST_CACHE = new Map();
+        const ANILIST_INFLIGHT = new Map();
+
+        const _AL_TITLE = `title{romaji english native userPreferred}`;
+        const _AL_COVER = `coverImage{extraLarge large medium color}`;
+
+        const _AL_CARD_FIELDS = `id idMal ${_AL_TITLE} ${_AL_COVER} bannerImage format status episodes seasonYear season averageScore meanScore popularity genres duration isAdult description(asHtml:false) startDate{year month day} nextAiringEpisode{episode airingAt timeUntilAiring}`;
+
+        const _AL_FULL_FIELDS = `${_AL_CARD_FIELDS} synonyms studios(isMain:true){nodes{name}} trailer{id site thumbnail} tags{name rank isGeneralSpoiler isMediaSpoiler} relations{edges{relationType node{id ${_AL_TITLE} ${_AL_COVER} format status episodes seasonYear synonyms}}}`;
+
+        function _alCacheTtl(opName) {
+            if (!opName) return 0;
+            if (opName === 'info' || opName === 'chars' || opName === 'recs') return 300_000;
+            if (opName === 'search' || opName === 'filter' || opName === 'suggest') return 30_000;
+            if (opName === 'trending' || opName === 'popular' || opName === 'upcoming' || opName === 'recent' || opName === 'movies') return 45_000;
+            if (opName === 'schedule') return 60_000;
+            if (opName === 'spotlight') return 60_000;
+            return 15_000;
+        }
+
+        async function _anilist(opName, query, variables) {
+            const cacheKey = opName + '|' + JSON.stringify(variables || {});
+            const ttl = _alCacheTtl(opName);
+            const now = Date.now();
+
+            if (ttl > 0) {
+                const cached = ANILIST_CACHE.get(cacheKey);
+                if (cached && cached.expiresAt > now) return cached.data;
+                if (cached) ANILIST_CACHE.delete(cacheKey);
+            }
+            if (ANILIST_INFLIGHT.has(cacheKey)) return ANILIST_INFLIGHT.get(cacheKey);
+
+            const run = (async () => {
+                const MAX_TRIES = 3;
+                let lastErr;
+                for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
+                    if (attempt > 0) {
+                        await new Promise(r => setTimeout(r, 1000 * attempt));
+                    }
+                    try {
+                        const res = await fetch(ANILIST_ENDPOINT, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ query, variables: variables || {} }),
+                        });
+                        if (res.status === 429) {
+                            lastErr = new Error('AniList rate limited');
+                            continue;
+                        }
+                        if (!res.ok) throw new Error('AniList ' + res.status);
+                        const json = await res.json();
+                        if (json && json.errors && json.errors.length) {
+                            throw new Error('AniList: ' + json.errors[0].message);
+                        }
+                        return (json && json.data) || {};
+                    } catch (e) {
+                        lastErr = e;
+                        if (attempt < MAX_TRIES - 1) continue;
+                    }
+                }
+                throw lastErr;
+            })();
+
+            const wrapped = run
+                .then(data => {
+                    if (ttl > 0) ANILIST_CACHE.set(cacheKey, { data, expiresAt: Date.now() + ttl });
+                    return data;
+                })
+                .finally(() => ANILIST_INFLIGHT.delete(cacheKey));
+
+            ANILIST_INFLIGHT.set(cacheKey, wrapped);
+            return wrapped;
+        }
+
+        function _alCurrentSeason() {
+            const m = new Date().getUTCMonth();
+            if (m <= 1 || m === 11) return 'WINTER';
+            if (m <= 4) return 'SPRING';
+            if (m <= 7) return 'SUMMER';
+            return 'FALL';
+        }
+
+        async function _alPage(opName, page, perPage, extraFilter, sort) {
+            const query = `query($page:Int,$perPage:Int${extraFilter.signature ? ',' + extraFilter.signature : ''}){Page(page:$page,perPage:$perPage){pageInfo{total currentPage hasNextPage} media(type:ANIME,isAdult:false,sort:${sort}${extraFilter.where ? ',' + extraFilter.where : ''}){${_AL_CARD_FIELDS}}}}`;
+            const data = await _anilist(opName, query, { page, perPage, ...(extraFilter.vars || {}) });
+            return ((data.Page || {}).media) || [];
+        }
+
+        const Kurovexa = {
+            spotlight: () => _alPage('spotlight', 1, 10, { signature: '', where: '', vars: {} }, 'TRENDING_DESC'),
+            trending:  (page = 1, per = 20) => _alPage('trending', page, per, { signature: '', where: '', vars: {} }, 'TRENDING_DESC'),
+            popular:   (page = 1, per = 20) => _alPage('popular',  page, per, { signature: '', where: '', vars: {} }, 'POPULARITY_DESC'),
+            upcoming:  (page = 1, per = 20) => _alPage('upcoming', page, per, { signature: '', where: 'status:NOT_YET_RELEASED', vars: {} }, 'POPULARITY_DESC'),
+            recent:    (page = 1, per = 20) => _alPage('recent',   page, per, { signature: '', where: 'status:RELEASING', vars: {} }, 'UPDATED_AT_DESC'),
+            movies:    (page = 1, per = 20) => _alPage('movies',   page, per, { signature: '', where: 'format:MOVIE', vars: {} }, 'POPULARITY_DESC'),
+
+            schedule: async (page = 1) => {
+                const nowSec = Math.floor(Date.now() / 1000);
+                const query = `query($page:Int,$start:Int,$end:Int){Page(page:$page,perPage:50){pageInfo{hasNextPage} airingSchedules(airingAt_greater:$start,airingAt_lesser:$end,sort:TIME){id airingAt timeUntilAiring episode media{${_AL_CARD_FIELDS}}}}}`;
+                const data = await _anilist('schedule', query, { page, start: nowSec, end: nowSec + 7 * 86400 });
+                return ((data.Page || {}).airingSchedules) || [];
+            },
+
+            search: async (q, page = 1, per = 20) => {
+                const query = `query($q:String,$page:Int,$perPage:Int){Page(page:$page,perPage:$perPage){media(type:ANIME,search:$q,sort:SEARCH_MATCH){${_AL_CARD_FIELDS} synonyms}}}`;
+                const data = await _anilist('search', query, { q, page, perPage: per });
+                return ((data.Page || {}).media) || [];
+            },
+
+            suggest: async (q) => {
+                const query = `query($q:String){Page(page:1,perPage:8){media(type:ANIME,search:$q,sort:SEARCH_MATCH){id ${_AL_TITLE} ${_AL_COVER} format seasonYear}}}`;
+                const data = await _anilist('suggest', query, { q });
+                return ((data.Page || {}).media) || [];
+            },
+
+            filter: async (params = {}) => {
+                const sigParts = [];
+                const whereParts = [];
+                const vars = { page: parseInt(params.page || 1, 10), perPage: parseInt(params.per_page || 20, 10) };
+                const addVar = (sig, name, value) => {
+                    sigParts.push(sig);
+                    whereParts.push(`${name}:$${name}`);
+                    vars[name] = value;
+                };
+                if (params.query) addVar('$query:String', 'search', params.query);
+                if (params.genres) {
+                    const g = Array.isArray(params.genres) ? params.genres : [params.genres];
+                    if (g.length) addVar('$genre_in:[String]', 'genre_in', g);
+                }
+                if (params.year) addVar('$seasonYear:Int', 'seasonYear', parseInt(params.year, 10));
+                if (params.season) addVar('$season:MediaSeason', 'season', String(params.season).toUpperCase());
+                if (params.format) addVar('$format:MediaFormat', 'format', String(params.format).toUpperCase());
+                if (params.status) addVar('$status:MediaStatus', 'status', String(params.status).toUpperCase());
+                const sort = (params.sort || 'POPULARITY_DESC').toUpperCase();
+                const extraSig = sigParts.length ? ',' + sigParts.join(',') : '';
+                const extraWhere = whereParts.length ? ',' + whereParts.join(',') : '';
+                const query = `query($page:Int,$perPage:Int${extraSig}){Page(page:$page,perPage:$perPage){pageInfo{total currentPage hasNextPage} media(type:ANIME,isAdult:false,sort:${sort}${extraWhere}){${_AL_CARD_FIELDS}}}}`;
+                const data = await _anilist('filter', query, vars);
+                return ((data.Page || {}).media) || [];
+            },
+
+            info: async (id) => {
+                const query = `query($id:Int){Media(id:$id,type:ANIME){${_AL_FULL_FIELDS}}}`;
+                const data = await _anilist('info', query, { id: parseInt(id, 10) });
+                return data.Media || null;
+            },
+
+            chars: async (id) => {
+                const query = `query($id:Int){Media(id:$id,type:ANIME){characters(sort:[ROLE,RELEVANCE],perPage:24){edges{role node{id name{full first last userPreferred} image{large medium}}}}}}`;
+                const data = await _anilist('chars', query, { id: parseInt(id, 10) });
+                const edges = (((data.Media || {}).characters) || {}).edges || [];
+                return edges.map(e => ({
+                    role: e && e.role,
+                    name: (e && e.node && e.node.name) || null,
+                    image: (e && e.node && e.node.image) || null,
+                }));
+            },
+
+            recs: async (id) => {
+                const query = `query($id:Int){Media(id:$id,type:ANIME){recommendations(sort:RATING_DESC,perPage:20){edges{node{rating mediaRecommendation{${_AL_CARD_FIELDS}}}}}}}`;
+                const data = await _anilist('recs', query, { id: parseInt(id, 10) });
+                const edges = (((data.Media || {}).recommendations) || {}).edges || [];
+                return edges
+                    .map(e => e && e.node && e.node.mediaRecommendation)
+                    .filter(Boolean);
+            },
+
+            episodes: (id) => fetchAPI(`/episodes/${id}`),
+            watch: (provider, anilistId, audio, episodeId) =>
+                fetchAPI(`/watch/${provider}/${anilistId}/${audio}/${episodeId}`),
+            eclipseMap:     (anilistId)             => fetchAPI(`/eclipse/map/${anilistId}`),
+            eclipseServers: (slug, ep)              => fetchAPI(`/eclipse/servers?id=${encodeURIComponent(slug)}&epNum=${ep}`),
+            eclipseSources: (slug, ep, type, prov)  => fetchAPI(`/eclipse/sources?id=${encodeURIComponent(slug)}&epNum=${ep}&type=${type}&providerId=${prov}`),
+        };
+
+        window.Kurovexa = Kurovexa;
+        // =========================================================================
+        // EINDE VAN NIEUWE KUROVEXA / ANINEKO API LOGICA
+        // =========================================================================
+
         const ANILIST_API = 'https://graphql.anilist.co';
+        const ANIVEXA_BASE = 'https://anivexa-three.vercel.app'; 
+        
         const SUPABASE_URL = "https://zieuivzmzzxbraefeovl.supabase.co";
         const SUPABASE_KEY = "sb_publishable_EpN5OqgyzVvorrR27-V2MA_ZPCnD7He";
         
@@ -98,9 +498,13 @@
         let lazyObserver = null;
         let searchTimeout = null;
         let countdownInterval = null;
+        
+        let hlsInstance = null;
+        let anivexaEpisodesCache = {}; 
+        let autoNextTriggered = false;
 
         let app = {
-            view: 'home', id: null, ep: 1, mode: 'sub', searchQuery: '', libraryFilter: 'All',
+            view: 'home', id: null, ep: 1, mode: 'sub', server: 'megaplay', searchQuery: '', libraryFilter: 'All',
             user: 'Gebruiker', showContinue: true, lang: 'english', autoPlay: true, autoNext: true, autoSkipIntro: false, skipSeconds: 85, 
             defaultAudio: 'sub', recent: [], xmlLib: [], autoDubFallback: true
         };
@@ -109,16 +513,18 @@
         let currentDuration = 0;
         let mediaCache = {};
 
+        // Bekende embed providers van Anivexa (ANINEKO toegevoegd)
+        const EMBED_PROVIDERS = ['anikoto', 'animegg', 'anidbapp', 'reanime', 'anineko'];
+
         const STATIC_TRENDING = [
-            { id: 147105, title: "Witch Hat Atelier", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx147105-X98uGbyg64gD.png" },
-            { id: 186333, title: "Kunon the Sorcerer Can See", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx186333-eWzW9l5y4Q5Z.png" },
-            { id: 191205, title: "Easygoing Territory Defense", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx191205-b3eF9YJ5K2Zq.png" },
-            { id: 185993, title: "Noble Reincarnation", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx185993-9qG4l8Y3K4Za.png" },
-            { id: 172019, title: "Dr. Stone: Science Future", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx172019-9uR6zG1yY2a5.png" },
-            { id: 101280, title: "That Time I Got Reincarnated as a Slime", img: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101280-9tH8kL1vX2b5.png" }
+            { id: 147105, title: "Witch Hat Atelier", img: "https://s4.anilist.co/file/anilistcdn/media/indigo/cover/large/bx147105-X98uGbyg64gD.png" },
+            { id: 186333, title: "Kunon the Sorcerer Can See", img: "https://s4.anilist.co/file/anilistcdn/media/indigo/cover/large/bx186333-eWzW9l5y4Q5Z.png" },
+            { id: 191205, title: "Easygoing Territory Defense", img: "https://s4.anilist.co/file/anilistcdn/media/indigo/cover/large/bx191205-b3eF9YJ5K2Zq.png" },
+            { id: 185993, title: "Noble Reincarnation", img: "https://s4.anilist.co/file/anilistcdn/media/indigo/cover/large/bx185993-9qG4l8Y3K4Za.png" },
+            { id: 172019, title: "Dr. Stone: Science Future", img: "https://s4.anilist.co/file/anilistcdn/media/indigo/cover/large/bx172019-9uR6zG1yY2a5.png" },
+            { id: 101280, title: "That Time I Got Reincarnated as a Slime", img: "https://s4.anilist.co/file/anilistcdn/media/indigo/cover/large/bx101280-9tH8kL1vX2b5.png" }
         ];
 
-        // --- TOASTS & MODALS ---
         window.showToast = function(message, type = 'success') {
             const container = document.getElementById('toast-container');
             if(!container) return;
@@ -143,7 +549,331 @@
             document.getElementById('confirm-ok-btn').onclick = () => { close(); onConfirm(); };
         };
 
-        // --- ROUTING ---
+        async function fetchWithCorsFallback(url) {
+            try {
+                const response = await fetch(url);
+                if (response.ok || response.status === 404 || response.status === 500) return response;
+            } catch (e) {
+                console.warn(`Directe verbinding mislukt voor ${url}, CORS proxy inschakelen...`, e);
+            }
+
+            try {
+                const proxyUrl = `https://corsproxy.io/?` + encodeURIComponent(url);
+                const response = await fetch(proxyUrl);
+                if (response.ok || response.status === 404 || response.status === 500) return response;
+            } catch (e) {
+                console.warn(`Proxy 1 mislukt voor ${url}, overschakelen naar AllOrigins...`, e);
+            }
+
+            try {
+                const proxyUrl = `https://api.allorigins.win/raw?url=` + encodeURIComponent(url);
+                const response = await fetch(proxyUrl);
+                if (response.ok || response.status === 404 || response.status === 500) return response;
+            } catch (e) {
+                console.warn(`Proxy 2 mislukt voor ${url}, overschakelen naar Thingproxy...`, e);
+            }
+
+            try {
+                const proxyUrl = `https://thingproxy.freeboard.io/fetch/` + url;
+                const response = await fetch(proxyUrl);
+                if (response.ok || response.status === 404 || response.status === 500) return response;
+            } catch (e) {
+                console.error(`Alle fallbacks en proxies zijn mislukt voor ${url}`, e);
+            }
+
+            throw new Error(`Verbindingsfout naar ${url} (CORS/Offline)`);
+        }
+
+        function extractEpisodes(episodesData) {
+            let sub = [];
+            let dub = [];
+
+            if (Array.isArray(episodesData)) {
+                episodesData.forEach(ep => {
+                    if (ep.dub || ep.category === 'dub' || (ep.type && ep.type.toLowerCase() === 'dub') || (ep.audio && ep.audio.toLowerCase() === 'dub')) {
+                        dub.push(ep);
+                    } else {
+                        sub.push(ep);
+                    }
+                });
+            } else if (episodesData && typeof episodesData === 'object') {
+                if (Array.isArray(episodesData.sub)) sub = episodesData.sub;
+                if (Array.isArray(episodesData.dub)) dub = episodesData.dub;
+                
+                if (sub.length === 0 && dub.length === 0) {
+                    for (const [key, val] of Object.entries(episodesData)) {
+                        if (Array.isArray(val)) {
+                            if (key.toLowerCase().includes('dub')) dub = val;
+                            else sub = val;
+                        }
+                    }
+                }
+            }
+            return { sub, dub };
+        }
+
+        function normalizeApiProviders(data, apiVersion) {
+            let list = [];
+            if (!data) return list;
+
+            const providers = data.providers || data;
+            if (!providers) return list;
+
+            if (Array.isArray(providers)) {
+                providers.forEach(p => {
+                    const providerName = p.providerId || p.id || p.name || "unknown";
+                    const { sub, dub } = extractEpisodes(p.episodes || p);
+                    list.push({ id: `${apiVersion}-${providerName}`, api: apiVersion, provider: providerName, sub: sub, dub: dub });
+                });
+            } else if (typeof providers === 'object') {
+                for (const [providerName, pData] of Object.entries(providers)) {
+                    if (pData && typeof pData === 'object') {
+                        const { sub, dub } = extractEpisodes(pData.episodes || pData);
+                        list.push({ id: `${apiVersion}-${providerName}`, api: apiVersion, provider: providerName, sub: sub, dub: dub });
+                    }
+                }
+            }
+            return list;
+        }
+
+        window.loadAllProviders = async function(anilistId) {
+            if (anivexaEpisodesCache[anilistId]) return anivexaEpisodesCache[anilistId];
+
+            let allProviders = [];
+            let anivexaFetched = false;
+
+            try {
+                const url = `${ANIVEXA_BASE}/episodes/${anilistId}`;
+                const resAnivexa = await fetchWithCorsFallback(url);
+                if (resAnivexa.ok) {
+                    const parsedAnivexa = normalizeApiProviders(await resAnivexa.json(), 'anivexa');
+                    if (parsedAnivexa.length > 0) {
+                        allProviders = allProviders.concat(parsedAnivexa);
+                        anivexaFetched = true;
+                    }
+                }
+            } catch (e) {
+                console.error("Anivexa API fetch error:", e);
+            }
+
+            if (!anivexaFetched) {
+                const fallbackAnivexaProviders = ["animepahe", "allmanga", "reanime", "anikoto", "animegg", "anineko", "anidbapp"];
+                fallbackAnivexaProviders.forEach(provider => {
+                    allProviders.push({ id: `anivexa-${provider}`, api: 'anivexa', provider: provider, sub: [], dub: [] });
+                });
+            }
+
+            anivexaEpisodesCache[anilistId] = allProviders;
+            return allProviders;
+        };
+
+        window.checkApiDiagnostics = async function() {
+            try {
+                const resAnivexa = await fetchWithCorsFallback(`${ANIVEXA_BASE}/`);
+                document.getElementById('diag-anivexa-status').innerHTML = resAnivexa.ok ? '<span class="text-emerald-400"><i class="fa-solid fa-circle-check"></i> Online</span>' : `<span class="text-amber-400">Online (${resAnivexa.status})</span>`;
+            } catch (e) { document.getElementById('diag-anivexa-status').innerHTML = '<span class="text-red-500"><i class="fa-solid fa-circle-exclamation"></i> Offline</span>'; }
+        };
+
+        window.setupNativePlayer = function(m3u8Url, subtitles = []) {
+            const video = document.getElementById('native-player');
+            if (!video) return;
+
+            if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+            video.innerHTML = ''; 
+
+            if (subtitles && subtitles.length > 0) {
+                subtitles.forEach(sub => {
+                    const subUrl = sub.file || sub.url;
+                    if(subUrl) {
+                        const track = document.createElement('track');
+                        track.kind = 'captions'; track.label = sub.label || sub.lang || sub.language || 'Sub';
+                        track.srclang = (track.label).substring(0, 2).toLowerCase(); track.src = subUrl;
+                        if (track.label.toLowerCase().includes('eng') || track.label.toLowerCase().includes('nl')) track.default = true;
+                        video.appendChild(track);
+                    }
+                });
+            }
+
+            function initHlsStream(streamUrl) {
+                if (Hls.isSupported()) {
+                    hlsInstance = new Hls({
+                        maxBidirectionalLinkDelay: 1.5,
+                        xhrSetup: function(xhr, url) {
+                            xhr.withCredentials = false;
+                        }
+                    });
+                    hlsInstance.loadSource(streamUrl);
+                    hlsInstance.attachMedia(video);
+                    hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() { restoreVideoPositionAndPlay(video); });
+                    hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+                        if (data.fatal) {
+                            switch(data.type) {
+                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                    console.warn("HLS-netwerkfout gedetecteerd, proberen te herstellen via CORS-proxy...");
+                                    if (!streamUrl.includes('corsproxy.io')) {
+                                        const proxiedUrl = `https://corsproxy.io/?` + encodeURIComponent(m3u8Url);
+                                        hlsInstance.destroy();
+                                        initHlsStream(proxiedUrl);
+                                    } else {
+                                        window.showToast("Stream laadfout. De server weigert verbinding door CORS-beveiliging.", "error");
+                                    }
+                                    break;
+                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                    console.warn("HLS-mediafout, herstarten...");
+                                    hlsInstance.recoverMediaError();
+                                    break;
+                                default:
+                                    hlsInstance.destroy();
+                                    window.showToast("Fatale speler error bij laden van m3u8 stream.", "error");
+                                    break;
+                            }
+                        }
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = streamUrl;
+                    video.addEventListener('loadedmetadata', function() { restoreVideoPositionAndPlay(video); });
+                }
+            }
+
+            initHlsStream(m3u8Url);
+            video.ontimeupdate = () => { window.updateProgressUI(video.currentTime, video.duration); };
+        };
+
+        function restoreVideoPositionAndPlay(video) {
+            const ar = app.recent.find(r => r && r.id == app.id && r.ep == app.ep);
+            if (ar && ar.time > 0 && ar.time < (video.duration - 5 || 99999)) {
+                video.currentTime = ar.time;
+            }
+            if (app.autoPlay) video.play().catch(e => console.log("Autoplay geblokkeerd door browser instellingen."));
+        }
+
+        window.loadAnivexaAndRenderServers = async function(anilistId, targetEp, mode) {
+            const embedContainer = document.getElementById('anivexa-embeds-container');
+            const restContainer = document.getElementById('anivexa-rest-container');
+            
+            if (!embedContainer || !restContainer) return;
+
+            embedContainer.innerHTML = '<span class="text-[9px] text-zinc-500"><i class="fa-solid fa-spinner animate-spin"></i> Synchroniseren...</span>';
+            restContainer.innerHTML = '<span class="text-[9px] text-zinc-500"><i class="fa-solid fa-spinner animate-spin"></i> Synchroniseren...</span>';
+
+            const providers = await loadAllProviders(anilistId);
+            embedContainer.innerHTML = '';
+            restContainer.innerHTML = '';
+
+            let validServers = [];
+            
+            providers.forEach(p => {
+                 const epList = p[mode] || [];
+                 const hasEp = epList.find(e => e.number == targetEp || e.episode == targetEp);
+                 
+                 if (hasEp || (p.api === 'anivexa' && epList.length === 0)) {
+                      validServers.push(p);
+                 }
+            });
+
+            if (app.server !== 'megaplay' && !validServers.find(vs => vs.id === app.server)) {
+                if (validServers.length > 0) app.server = validServers[0].id;
+                else app.server = 'megaplay';
+                saveCloudDataDebounced();
+            }
+
+            let embedCount = 0;
+            let restCount = 0;
+
+            validServers.forEach(p => {
+                const btn = document.createElement('button');
+                const srvName = p.id;
+                const isActive = app.server === srvName;
+                btn.className = `px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all whitespace-nowrap ${isActive ? 'bg-accent text-black font-black shadow-[0_0_10px_rgba(202,233,98,0.4)]' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 border border-white/5 hover:border-accent/30'}`;
+                btn.innerHTML = `<i class="fa-solid fa-bolt text-[8px] mr-1"></i> ${p.provider.toUpperCase()}`;
+                btn.onclick = () => window.setServer(srvName);
+
+                if (EMBED_PROVIDERS.includes(p.provider.toLowerCase())) {
+                    embedContainer.appendChild(btn);
+                    embedCount++;
+                } else {
+                    restContainer.appendChild(btn);
+                    restCount++;
+                }
+            });
+
+            if (embedCount === 0) embedContainer.innerHTML = '<span class="text-[9px] text-zinc-600">Geen embed servers beschikbaar</span>';
+            if (restCount === 0) restContainer.innerHTML = '<span class="text-[9px] text-zinc-600">Geen direct streams beschikbaar</span>';
+            
+            return validServers;
+        };
+
+        window.loadStreamAndPlay = async function(anilistId, targetEp, mode, serverId) {
+            const providers = await loadAllProviders(anilistId);
+            const pObj = providers.find(p => p.id === serverId);
+
+            if (!pObj) {
+                window.showToast("Geselecteerde server ontbreekt.", "error");
+                return;
+            }
+
+            const epList = pObj[mode] || [];
+            const epObj = epList.find(e => e.number == targetEp || e.episode == targetEp);
+
+            let fetchUrl = `${ANIVEXA_BASE}/watch/${pObj.provider}/${anilistId}/${mode}/${pObj.provider}-${targetEp}`;
+
+            try {
+                const res = await fetchWithCorsFallback(fetchUrl);
+                const data = await res.json();
+                
+                let streamData = null;
+                if (data.streams) streamData = data;
+                else if (data.results && data.results.bestStream) streamData = { streams: [data.results.bestStream, ...(data.results.streams || [])], subtitles: data.results.subtitles || [] };
+                else if (data.results && data.results.streams) streamData = data.results;
+                else if (data.bestStream) streamData = { streams: [data.bestStream], subtitles: data.subtitles || [] };
+                
+                if (streamData && streamData.streams && streamData.streams.length > 0) {
+                    let best = streamData.streams.find(s => s.quality === '1080p' || s.quality === 'auto' || s.quality === '720p') 
+                            || streamData.streams.find(s => s.type === 'hls' && s.isActive !== false) 
+                            || streamData.streams[0];
+
+                    const iframeEl = document.getElementById('player');
+                    const nativeEl = document.getElementById('native-player-container');
+
+                    // Als het bestand een embedtype is, dwingen we de iframe af.
+                    if (best.embed || best.type === 'embed' || EMBED_PROVIDERS.includes(pObj.provider.toLowerCase())) {
+                        const targetEmbedUrl = best.embed || best.url;
+                        
+                        iframeEl.src = targetEmbedUrl;
+                        iframeEl.classList.remove('hidden');
+                        iframeEl.classList.add('block');
+                        
+                        nativeEl.classList.add('hidden');
+                        nativeEl.classList.remove('block');
+                        
+                        if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+                    } else {
+                        // Voor HLS direct streams (.m3u8) gebruiken we de eigen HTML5 speler
+                        iframeEl.classList.add('hidden');
+                        iframeEl.classList.remove('block');
+                        iframeEl.src = ""; 
+                        
+                        nativeEl.classList.remove('hidden');
+                        nativeEl.classList.add('block');
+                        
+                        window.setupNativePlayer(best.url, streamData.subtitles || []);
+                    }
+                } else {
+                    window.showToast(`Geen videobronnen gevonden op deze server.`, "error");
+                }
+            } catch (err) {
+                console.error(err);
+                window.showToast("Ophalen van videostream mislukt.", "error");
+            }
+        };
+
+        window.setServer = function(srv) {
+            if (app.server === srv) return;
+            app.server = srv;
+            saveCloudDataDebounced();
+            render(); 
+        };
+
         function syncStateToUrl() {
             let hash = `#${app.view}`;
             if (app.id) hash += `?id=${app.id}${app.ep ? '&ep=' + app.ep : ''}`;
@@ -152,12 +882,9 @@
 
         function restoreStateFromUrl() {
             const hash = window.location.hash;
-            if (!hash || hash === '#') {
-                app.view = 'home'; app.id = null; app.ep = 1; return;
-            }
+            if (!hash || hash === '#') { app.view = 'home'; app.id = null; app.ep = 1; return; }
             const parts = hash.substring(1).split('?');
-            app.view = parts[0] || 'home';
-            app.id = null; app.ep = 1;
+            app.view = parts[0] || 'home'; app.id = null; app.ep = 1;
 
             if (parts[1]) {
                 const params = new URLSearchParams(parts[1]);
@@ -168,7 +895,6 @@
 
         window.onhashchange = () => { restoreStateFromUrl(); render(); };
 
-        // --- AUTH & SUPABASE ---
         window.onload = async () => {
             try {
                 sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -252,6 +978,7 @@
                 app.recent = data.recent || [];
                 if (data.settings) {
                     app.defaultAudio = data.settings.defaultAudio || 'sub'; app.mode = app.defaultAudio;
+                    app.server = data.settings.server || 'megaplay';
                     app.user = data.settings.user || app.user; app.showContinue = data.settings.showContinue !== false;
                     app.lang = data.settings.lang || 'english'; app.autoPlay = data.settings.autoPlay !== false;
                     app.autoNext = data.settings.autoNext !== false; app.autoSkipIntro = data.settings.autoSkipIntro === true;
@@ -259,7 +986,7 @@
                 }
             } else {
                 app.user = sessionData.user.email.split('@')[0];
-                await sb.from('anime_users').insert([{ id: sessionData.user.id, username: app.user, watchlist: [], recent: [], settings: { user: app.user } }]);
+                await sb.from('anime_users').insert([{ id: sessionData.user.id, username: app.user, watchlist: [], recent: [], settings: { user: app.user, server: 'megaplay' } }]);
             }
             document.getElementById('app-header').classList.remove('hidden');
             document.getElementById('app-navigation').classList.remove('hidden');
@@ -270,14 +997,13 @@
             if (!sessionData) return;
             await sb.from('anime_users').update({
                 watchlist: app.xmlLib, recent: app.recent,
-                settings: { defaultAudio: app.defaultAudio, user: app.user, showContinue: app.showContinue, lang: app.lang, autoPlay: app.autoPlay, autoNext: app.autoNext, autoSkipIntro: app.autoSkipIntro, skipSeconds: app.skipSeconds, autoDubFallback: app.autoDubFallback }
+                settings: { defaultAudio: app.defaultAudio, server: app.server, user: app.user, showContinue: app.showContinue, lang: app.lang, autoPlay: app.autoPlay, autoNext: app.autoNext, autoSkipIntro: app.autoSkipIntro, skipSeconds: app.skipSeconds, autoDubFallback: app.autoDubFallback }
             }).eq('id', sessionData.user.id);
         }
         function saveCloudDataDebounced() { clearTimeout(saveTimeout); saveTimeout = setTimeout(saveCloudData, 1000); }
 
         window.logout = async function() { await sb.auth.signOut(); sessionData = null; window.location.hash = ''; showLoginPage('login'); };
 
-        // --- API & DATA HANDLING ---
         async function gql(query, vars) {
             try {
                 const r = await fetch(ANILIST_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables: vars }) });
@@ -326,15 +1052,20 @@
 
         window.skipIntroTime = function() {
             currentPlaybackTime += app.skipSeconds;
-            const player = document.getElementById('player');
-            if (player && player.contentWindow) {
-                player.contentWindow.postMessage(JSON.stringify({ event: "command", command: "seek", value: currentPlaybackTime }), "*");
-                window.showToast(`Geskipt (+${app.skipSeconds}s)`);
+            if (app.server === 'megaplay' || document.getElementById('player').classList.contains('block')) {
+                const player = document.getElementById('player');
+                if (player && player.contentWindow) {
+                    player.contentWindow.postMessage(JSON.stringify({ event: "command", command: "seek", value: currentPlaybackTime }), "*");
+                }
+            } else {
+                const video = document.getElementById('native-player');
+                if (video) video.currentTime = currentPlaybackTime;
             }
+            window.showToast(`Geskipt (+${app.skipSeconds}s)`);
         };
 
         window.quickIncrement = function(id) {
-            let item = app.xmlLib.find(i => i.id == id);
+            let item = app.xmlLib.find(i => i && i.id == id);
             if (item) {
                 let current = parseInt(item.progress || 0);
                 let total = parseInt(item.episodes || 12);
@@ -352,7 +1083,7 @@
         };
 
         window.changeLocalFolderPrompt = function(id) {
-            let item = app.xmlLib.find(i => i.id == id);
+            let item = app.xmlLib.find(i => i && i.id == id);
             if (item) {
                 const newStatus = prompt(`Wijzig status voor ${item.title}:\nWatching, Watched, Dropped of Plan to Watch`, item.status);
                 if (newStatus && ["Watching", "Watched", "Dropped", "Plan to Watch"].includes(newStatus)) {
@@ -366,14 +1097,11 @@
             }
         };
 
-        // GECORRIGEERDE EXPORT FUNCTIE: Zet nu AniList ID's over naar MAL ID's en gebruikt correcte strings!
         window.exportMyAnimeListXML = async function() {
             window.showToast("Voorbereiden (ophalen MAL ID's)... Dit kan even duren.");
-            
             const aniIds = app.xmlLib.map(i => parseInt(i.id)).filter(id => !isNaN(id));
             let malIdMap = {};
             
-            // AniList ID naar MAL ID vertalen
             try {
                 for (let i = 0; i < aniIds.length; i += 50) {
                     const chunk = aniIds.slice(i, i + 50);
@@ -384,22 +1112,17 @@
                         });
                     }
                 }
-            } catch (e) {
-                console.error("Fout bij ophalen MAL ID's", e);
-            }
+            } catch (e) { console.error("Fout bij ophalen MAL ID's", e); }
 
             let xml = `<?xml version="1.0" encoding="UTF-8" ?>\n<myanimelist>\n\t<myinfo>\n\t\t<user_name>${app.user}</user_name>\n\t\t<user_export_type>1</user_export_type>\n\t</myinfo>\n`;
             
             app.xmlLib.forEach(item => {
-                // MyAnimeList string formatting in de export
                 let statusStr = "Watching";
                 if (item.status === "Watched" || item.status === "Completed") statusStr = "Completed";
                 else if (item.status === "Dropped") statusStr = "Dropped";
                 else if (item.status === "Plan to Watch") statusStr = "Plan to Watch";
                 
-                // Fallback op eigen id als er geen MAL id is, hoewel het dan mogelijk overgeslagen wordt door MAL
                 const malId = malIdMap[item.id] || item.id;
-                
                 xml += `\t<anime>\n\t\t<series_animedb_id>${malId}</series_animedb_id>\n\t\t<series_title><![CDATA[${item.title}]]></series_title>\n\t\t<my_watched_episodes>${item.progress}</my_watched_episodes>\n\t\t<my_status>${statusStr}</my_status>\n\t\t<update_on_import>1</update_on_import>\n\t</anime>\n`;
             });
             xml += `</myanimelist>`;
@@ -414,7 +1137,6 @@
             window.showToast("MAL Back-up succesvol gedownload!");
         };
 
-        // GECORRIGEERDE IMPORT FUNCTIE: Zet MyAnimeList ID's terug om in AniList ID's!
         window.handleXML = function() {
             const file = document.getElementById('xml-input').files[0];
             if (!file) return window.showToast("Selecteer een XML bestand", "error");
@@ -452,7 +1174,6 @@
                         }
                     }
 
-                    // MyAnimeList ID naar AniList ID vertalen voor videospeler
                     let malToAniMap = {};
                     let aniMetaData = {};
                     try {
@@ -470,9 +1191,7 @@
                                 });
                             }
                         }
-                    } catch (err) {
-                        console.error("Fout bij omzetten MAL IDs", err);
-                    }
+                    } catch (err) { console.error("Fout bij omzetten MAL IDs", err); }
 
                     let finalImport = [];
                     importedMalItems.forEach(item => {
@@ -480,21 +1199,11 @@
                         if (aniId) {
                             const meta = aniMetaData[aniId];
                             finalImport.push({
-                                id: aniId.toString(),
-                                title: meta.title || item.title,
-                                status: item.status,
-                                progress: item.progress,
-                                episodes: meta.episodes,
-                                coverImage: meta.coverImage
+                                id: aniId.toString(), title: meta.title || item.title, status: item.status, progress: item.progress, episodes: meta.episodes, coverImage: meta.coverImage
                             });
                         } else {
                             finalImport.push({
-                                id: item.malId.toString(), // Onbekende id fallback
-                                title: item.title,
-                                status: item.status,
-                                progress: item.progress,
-                                episodes: 12,
-                                coverImage: ""
+                                id: item.malId.toString(), title: item.title, status: item.status, progress: item.progress, episodes: 12, coverImage: ""
                             });
                         }
                     });
@@ -542,13 +1251,15 @@
 
         window.toggleAutoNext = function() { app.autoNext = document.getElementById('toggle-autonext').checked; saveCloudDataDebounced(); };
 
-        // --- CORE FUNCTIES ---
         window.nav = function(view, params = {}) {
             if (!sessionData) return showLoginPage('login');
             if (app.view === 'watch' && app.id) saveCurrentVideoTime();
-            clearInterval(saveInterval); clearTimeout(dubTimeout);
+            
+            clearInterval(saveInterval); 
+            clearTimeout(dubTimeout);
             clearInterval(countdownInterval);
             if (lazyObserver) lazyObserver.disconnect();
+            if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
 
             app.view = view; app.id = params.id || null; app.ep = params.ep || 1;
             if (view === 'watch') { app.mode = app.defaultAudio; currentPlaybackTime = 0; currentDuration = 0; }
@@ -561,6 +1272,27 @@
             const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
             return h > 0 ? `${h}:${m<10?'0':''}${m}:${s<10?'0':''}${s}` : `${m}:${s<10?'0':''}${s}`;
         }
+
+        window.updateProgressUI = function(seconds, duration) {
+            currentPlaybackTime = parseFloat(seconds);
+            if (duration !== undefined && duration > 0) currentDuration = parseFloat(duration);
+            
+            const timeText = document.getElementById('playback-time-text');
+            const percentageText = document.getElementById('playback-progress-percentage');
+            if (timeText) timeText.innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
+            if (percentageText && currentDuration > 0) {
+                const pct = Math.round((currentPlaybackTime / currentDuration) * 100);
+                percentageText.innerText = `${pct}%`;
+            }
+
+            const isNearEnd = (currentDuration > 10 && currentPlaybackTime >= currentDuration - 2.5);
+            if (isNearEnd) {
+                if (autoNextTriggered) return;
+                autoNextTriggered = true;
+                setTimeout(() => { autoNextTriggered = false; }, 8000);
+                if (app.autoNext) window.playNextEpisode();
+            }
+        };
 
         window.saveCurrentVideoTime = function() {
             if (app.view !== 'watch' || !app.id) return;
@@ -600,10 +1332,20 @@
 
         function startDubCheckTimer() {
             clearTimeout(dubTimeout);
-            if (app.mode === 'dub' && app.autoDubFallback) dubTimeout = setTimeout(() => { window.showToast("Engelse audio niet beschikbaar. Switch naar Sub!", "error"); app.mode = 'sub'; render(); }, 3500);
+            if (app.mode === 'dub' && app.server === 'megaplay' && app.autoDubFallback) {
+                dubTimeout = setTimeout(() => { 
+                    window.showToast("Engelse audio timeout. Switch naar Sub!", "error"); 
+                    app.mode = 'sub'; 
+                    render(); 
+                }, 3500);
+            }
         }
 
-        window.checkAudioAvailabilityAndPlay = function(targetMode) { app.mode = targetMode; saveCloudDataDebounced(); render(); };
+        window.checkAudioAvailabilityAndPlay = function(targetMode) { 
+            app.mode = targetMode; 
+            saveCloudDataDebounced(); 
+            render(); 
+        };
 
         function mergeWatchlists(ex, inc) {
             let m = [...ex];
@@ -639,47 +1381,24 @@
 
         window.filterXml = function(status) { app.libraryFilter = status; renderLibraryGrid(); };
 
-        // --- AUTONEXT EVENT LISTENERS ---
         window.addEventListener('message', function(event) {
             try {
                 const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
                 if (!data) return;
-
                 const eventName = data.event || data.method || (data.value && data.value.event);
                 
                 if (eventName === 'timeupdate' || eventName === 'timeUpdate') {
                     const seconds = data.value?.seconds || data.data?.seconds || data.seconds || data.value?.time || data.time;
                     const duration = data.value?.duration || data.data?.duration || data.duration;
-                    
-                    if (seconds !== undefined) {
-                        currentPlaybackTime = parseFloat(seconds);
-                        if (duration !== undefined) {
-                            currentDuration = parseFloat(duration);
-                        }
-                        
-                        const timeText = document.getElementById('playback-time-text');
-                        const percentageText = document.getElementById('playback-progress-percentage');
-                        if (timeText) {
-                            timeText.innerText = `${formatDuration(currentPlaybackTime)} / ${formatDuration(currentDuration)}`;
-                        }
-                        if (percentageText && currentDuration > 0) {
-                            const pct = Math.round((currentPlaybackTime / currentDuration) * 100);
-                            percentageText.innerText = `${pct}%`;
-                        }
-                    }
+                    if (seconds !== undefined) window.updateProgressUI(seconds, duration);
                 }
                 
                 const isEnded = eventName === 'ended' || eventName === 'onVideoEnded' || eventName === 'complete';
-                const isNearEnd = (currentDuration > 10 && currentPlaybackTime >= currentDuration - 2.5);
-
-                if (isEnded || isNearEnd) {
-                    if (window.autoNextTriggered) return;
-                    window.autoNextTriggered = true;
-                    setTimeout(() => { window.autoNextTriggered = false; }, 8000);
-
-                    if (app.autoNext) {
-                        window.playNextEpisode();
-                    }
+                if (isEnded) {
+                    if (autoNextTriggered) return;
+                    autoNextTriggered = true;
+                    setTimeout(() => { autoNextTriggered = false; }, 8000);
+                    if (app.autoNext) window.playNextEpisode();
                 }
             } catch (e) { }
         });
@@ -701,28 +1420,21 @@
             if (nextEp <= totalEps) {
                 window.showToast(`Start aflevering ${nextEp}...`);
                 window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', nextEp, totalEps, loc ? loc.coverImage : '');
-                
-                setTimeout(() => {
-                    nav('watch', { id: app.id, ep: nextEp });
-                }, 200);
+                setTimeout(() => { nav('watch', { id: app.id, ep: nextEp }); }, 200);
             } else {
                 window.showToast("Zoeken naar volgend seizoen...");
-                
-                gql(`query($id:Int){Media(id:$id){relations{edges{relationType node{id type status episodes coverImage{large} title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                gql(`query($id:Int){Media(id:$id){relations{edges{relationType node{id type status episodes coverImage{large} title{romaji english}
+                }}}}}}`, {id: parseInt(app.id)}).then(res => {
                     if (!res || !res.data) return window.showToast("Laatste aflevering al bereikt!", "error");
-                    
                     const edges = res.data.Media.relations.edges;
                     const sequelEdge = edges.find(e => e.relationType === 'SEQUEL' && e.node.type === 'ANIME');
                     
                     if (sequelEdge) {
                         const sequel = sequelEdge.node;
                         const sequelTitle = app.lang === 'english' ? (sequel.title.english || sequel.title.romaji) : sequel.title.romaji;
-                        
                         window.showConfirm("Wil je doorgaan naar het volgende seizoen?", sequelTitle, () => {
                             window.autoUpdateProgressOnEpClick(app.id, loc ? loc.title : 'Anime', totalEps, totalEps, loc ? loc.coverImage : '', 'Watched');
-                            
                             const newStatus = sequel.status === 'RELEASING' ? 'Dropped' : 'Watching';
-                            
                             window.autoUpdateProgressOnEpClick(sequel.id, sequelTitle, 1, sequel.episodes || 12, sequel.coverImage.large, newStatus);
                             nav('watch', { id: sequel.id, ep: 1 });
                         });
@@ -734,7 +1446,6 @@
             }
         };
 
-        // --- RENDER LOGIC ---
         function render() {
             if (!sessionData) return showLoginPage('login');
             const main = document.getElementById('content'); if(!main) return;
@@ -752,15 +1463,56 @@
                 const stat = loc ? loc.status : "Niet opgeslagen";
 
                 main.innerHTML = `
-                    <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative">
-                        <iframe id="player" src="https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}" allow="autoplay; fullscreen"></iframe>
+                    <div class="aspect-video w-full bg-black rounded-t-2xl overflow-hidden border border-white/10 shadow-2xl relative" id="player-wrapper">
+                        
+                        <!-- Dynamische Iframe Player (MegaPlay & Anivexa Embeds) -->
+                        <iframe id="player" src="${app.server === 'megaplay' ? `https://megaplay.buzz/stream/ani/${app.id}/${app.ep}/${app.mode}` : ''}" allow="autoplay; fullscreen" class="${app.server === 'megaplay' ? 'block' : 'hidden'} w-full h-full border-none"></iframe>
+                        
+                        <!-- Native HLS Video Player voor m3u8 direct streams -->
+                        <div id="native-player-container" class="${app.server !== 'megaplay' ? 'block' : 'hidden'} w-full h-full relative">
+                            <video id="native-player" controls playsinline class="w-full h-full outline-none"></video>
+                            <div id="native-loading" class="absolute inset-0 flex items-center justify-center bg-black/80 z-10 hidden">
+                                <div class="text-center">
+                                    <i class="fa-solid fa-circle-notch animate-spin text-3xl text-accent mb-2"></i>
+                                    <p class="text-[10px] uppercase font-black tracking-widest text-zinc-400">Stream laden...</p>
+                                </div>
+                            </div>
+                        </div>
+
                         ${app.autoSkipIntro ? `<button onclick="skipIntroTime()" class="absolute bottom-16 right-4 bg-black/85 border border-[#cae962]/30 text-[#cae962] text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-2xl z-50"><i class="fa-solid fa-forward-fast"></i> Skip (+${app.skipSeconds}s)</button>` : ''}
                     </div>
+
+                    <!-- Gecentraliseerd 3-Lijnen Server Paneel in Huiskleuren -->
+                    <div class="bg-[#121212] p-4 border-x border-white/10 flex flex-col gap-2">
+                        <!-- Lijn 1: MegaPlay -->
+                        <div class="flex items-center gap-2 flex-wrap bg-black/40 p-2.5 rounded-xl border border-accent/20">
+                            <span class="text-[9px] font-black uppercase text-accent w-24 flex items-center gap-1.5"><i class="fa-solid fa-circle-play"></i> Mega Play:</span>
+                            <button onclick="setServer('megaplay')" class="px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all whitespace-nowrap ${app.server === 'megaplay' ? 'bg-accent text-black font-black shadow-[0_0_10px_rgba(202,233,98,0.4)]' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 border border-white/5 hover:border-accent/30'}">MegaPlay</button>
+                        </div>
+                        
+                        <!-- Lijn 2: Anivexa Embeds -->
+                        <div class="flex items-center gap-2 flex-wrap bg-black/40 p-2.5 rounded-xl border border-accent/20">
+                            <span class="text-[9px] font-black uppercase text-accent w-24 flex items-center gap-1.5"><i class="fa-solid fa-window-maximize"></i> Embeds:</span>
+                            <div id="anivexa-embeds-container" class="flex gap-2 items-center flex-wrap">
+                                <!-- Dynamisch gevuld -->
+                            </div>
+                        </div>
+
+                        <!-- Lijn 3: Anivexa Direct Streams -->
+                        <div class="flex items-center gap-2 flex-wrap bg-black/40 p-2.5 rounded-xl border border-accent/20">
+                            <span class="text-[9px] font-black uppercase text-accent w-24 flex items-center gap-1.5"><i class="fa-solid fa-bolt"></i> Direct / HLS:</span>
+                            <div id="anivexa-rest-container" class="flex gap-2 items-center flex-wrap">
+                                <!-- Dynamisch gevuld -->
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="bg-[#121212] px-4 py-2 border-x border-white/10 flex justify-between items-center text-[10px] font-bold">
                         <span class="flex items-center gap-1.5 text-zinc-500"><i class="fa-regular fa-clock accent"></i> POSITIE: <span id="playback-time-text" class="text-white">0:00 / 0:00</span></span>
                         <span id="playback-progress-percentage" class="accent">0%</span>
                     </div>
-                    <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-6 flex justify-between items-center flex-wrap gap-4">
+
+                    <div class="bg-[#121212] p-4 rounded-b-2xl border border-white/10 mb-4 flex justify-between items-center flex-wrap gap-4">
                         <div class="flex gap-2">
                             <button onclick="checkAudioAvailabilityAndPlay('sub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='sub'?'bg-accent text-black':'bg-black text-zinc-500'}">Sub</button>
                             <button onclick="checkAudioAvailabilityAndPlay('dub')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase ${app.mode=='dub'?'bg-accent text-black':'bg-black text-zinc-500'}">Dub</button>
@@ -775,8 +1527,23 @@
                         </label>
                     </div>
 
-                    <div id="next-ep-timer-container"></div>
+                    <!-- Diagnostics Menu -->
+                    <div class="bg-[#121212] rounded-xl border border-white/5 p-3 mb-6">
+                        <details class="group">
+                            <summary class="list-none flex justify-between items-center cursor-pointer text-[10px] font-black uppercase text-zinc-500 tracking-wider">
+                                <span><i class="fa-solid fa-vials accent mr-1.5"></i> Connectie Status</span>
+                                <i class="fa-solid fa-chevron-down transition-transform group-open:rotate-180 text-zinc-600"></i>
+                            </summary>
+                            <div class="mt-3 pt-3 border-t border-white/5 grid grid-cols-1 gap-4 text-[10px] font-bold">
+                                <div class="flex items-center justify-between bg-black/40 p-2 rounded-lg border border-white/5">
+                                    <span class="text-zinc-500">ANIVEXA API:</span>
+                                    <span id="diag-anivexa-status" class="accent">Scannen...</span>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
 
+                    <div id="next-ep-timer-container"></div>
                     <h1 id="w-title" class="text-xl font-black accent uppercase italic mb-4">${title}</h1>
                     
                     <div id="local-status-card" class="bg-[#121212] p-4 rounded-xl border border-white/5 mb-6 flex flex-wrap gap-4 items-center justify-between">
@@ -795,6 +1562,19 @@
                     <h2 class="text-[10px] font-black uppercase text-zinc-500 mb-4">Gerelateerd</h2>
                     <div id="rel-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>`;
 
+                window.loadAnivexaAndRenderServers(app.id, app.ep, app.mode).then(validServers => {
+                    if (app.server !== 'megaplay' && validServers.find(s => s.id === app.server)) {
+                        const loadingOverlay = document.getElementById('native-loading');
+                        if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+                        
+                        window.loadStreamAndPlay(app.id, app.ep, app.mode, app.server).then(() => {
+                            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                        });
+                    }
+                });
+
+                window.checkApiDiagnostics();
+
                 const grid = document.getElementById('ep-grid');
                 for (let i = 1; i <= eps; i++) {
                     let c = (i == app.ep) ? "bg-accent text-black" : (i <= prog ? "bg-emerald-800 text-emerald-100" : "bg-zinc-700 text-zinc-100");
@@ -812,7 +1592,7 @@
                 startDubCheckTimer();
 
                 setTimeout(() => {
-                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode airingAt}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
+                    gql(`query($id:Int){Media(id:$id){status nextAiringEpisode{episode airingAt}title{romaji english}episodes coverImage{large}relations{edges{relationType node{id type status episodes coverImage{large} title{romaji english}}}}}}`, {id: parseInt(app.id)}).then(res => {
                         if (!res || !res.data) return;
                         const m = res.data.Media;
                         const t = app.lang === 'english' ? (m.title.english || m.title.romaji) : m.title.romaji;
